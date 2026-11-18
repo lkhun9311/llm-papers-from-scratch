@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 import email.utils
+import html
 import re
 import sys
 import time
@@ -111,7 +112,9 @@ def host(url: str) -> str:
 
 def check_file(path: Path, offline: bool, errors: list[str]) -> int:
     n = 0
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        # Check what the renderer will show: decode entities (arxiv&#46;org) and percent escapes first.
+        line = urllib.parse.unquote(html.unescape(raw))
         texts = {m.end(): m.group(1) for m in INLINE.finditer(line)}  # url start -> link text
         spans = [(u.start(), u.end()) for u in URL.finditer(line) if u.group(0).startswith("https://")]
         for mm in MENTION.finditer(line):
@@ -122,6 +125,10 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
         for u in URL.finditer(line):
             url, text = u.group(0).rstrip(".,;:!?*_"), texts.get(u.start())
             where = f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}"
+            if re.search(r"/\.{1,2}(?:/|$|[?#])", urllib.parse.urlsplit(url).path + "/"):
+                n += 1
+                errors.append(f"{where}: dot segments are not allowed in a link path: {url}")
+                continue
             m = ARXIV_ANY.match(url)
             h = host(url)
             if h == "arxiv.org" or h.endswith(".arxiv.org"):
