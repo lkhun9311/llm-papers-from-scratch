@@ -14,6 +14,8 @@ Usage: scripts/check_links.py [--offline] [paths...]   (default: every *.md unde
 """
 from __future__ import annotations
 
+import datetime
+import email.utils
 import re
 import sys
 import time
@@ -37,6 +39,21 @@ def norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().casefold()
 
 
+def retry_after(value: str | None) -> float:
+    """Seconds asked for by a Retry-After header, either delta-seconds or an HTTP date; 0 if absent or unreadable."""
+    if not value:
+        return 0.0
+    if value.strip().isdigit():
+        return float(value.strip())
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return max(0.0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
+
+
 def arxiv_title(aid: str, version: str) -> str | None:
     """Title of that exact version, or None if the version does not exist."""
     url = f"https://export.arxiv.org/api/query?id_list={aid}{version}"
@@ -50,7 +67,7 @@ def arxiv_title(aid: str, version: str) -> str | None:
             # Any other status, or the fifth refusal, is raised and fails the check.
             if e.code not in (429, 503) or attempt == 4:
                 raise
-            time.sleep(int(e.headers.get("Retry-After") or 0) or 15 * 2**attempt)
+            time.sleep(retry_after(e.headers.get("Retry-After")) or 15 * 2**attempt)
         except (TimeoutError, urllib.error.URLError):
             if attempt == 4:
                 raise

@@ -45,7 +45,7 @@
     "ssd_directed": 1
   },
   "comparisons": {
-    "compare_checkpoint": 2196,
+    "compare_checkpoint": 2700,
     "compare_longformer": 72,
     "compare_mamba": 684,
     "compare_mamba2": 8504,
@@ -55,7 +55,7 @@
     "compare_partition": 1920,
     "compare_sizes": 24808,
     "compare_ssd_core": 216,
-    "compare_ssd_directed": 4,
+    "compare_ssd_directed": 6,
     "compare_ssd_identity": 216,
     "compare_vllm_norm": 9,
     "compare_window": 1608,
@@ -72,7 +72,7 @@
     "mixer_variant": 0.131,
     "partition": 2.86e-05,
     "ssd_core": 0.227,
-    "ssd_directed": 0.0,
+    "ssd_directed": 2.37e-05,
     "ssd_identity": 1.18e-05,
     "vllm_norm": 0.00732,
     "window": 0.000655,
@@ -129,6 +129,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 5.2,
-  "peak_rss_mib": 585
+  "seconds": 6.3,
+  "peak_rss_mib": 577
 }

@@ -360,6 +360,22 @@ def check_ssd_directed() -> None:
         close("ssd_directed", f"large dt {mode}", y, want, TOL_ID)
         close("ssd_directed", f"large dt {mode} final state", S, torch.full_like(S, math.exp(-1)), TOL_ID)
 
+    # One chunk of a production size (Mamba-Codestral uses 256, Mamba-2 checkpoints up to 1024).
+    # The segment sums must stay quadratic in the chunk length for this to run under the 4 GiB cap.
+    g = torch.Generator().manual_seed(7)
+    L, H, P, N = 1024, 2, 2, 3
+    x = torch.randn(1, L, H, P, dtype=DT, generator=g)
+    dt = 0.01 + 0.1 * torch.rand(1, L, H, dtype=DT, generator=g)
+    A = -torch.rand(H, dtype=DT, generator=g)
+    Bh, Ch = (torch.randn(1, L, H, N, dtype=DT, generator=g) for _ in range(2))
+    D = torch.randn(H, dtype=DT, generator=g)
+    S0 = torch.randn(1, H, P, N, dtype=DT, generator=g)
+    S_rec, S_chk = S0.clone(), S0.clone()
+    y_rec = impl.ssd_recurrent(x, dt, A, Bh, Ch, D, S_rec)
+    y_chk = impl.ssd_chunked(x, dt, A, Bh, Ch, D, S_chk, L)
+    close("ssd_directed", f"one chunk of {L} tokens", y_chk, y_rec, TOL_ID)
+    close("ssd_directed", f"one chunk of {L} tokens final state", S_chk, S_rec, TOL_ID)
+
 
 NORM_GROUPS = (1, 2, 4)
 
@@ -405,6 +421,20 @@ def state_clone(st) -> dict[str, torch.Tensor]:
     return {k: v.clone() for k, v in st.tensors().items()}
 
 
+def check_isolation(live, snap, pristine, tag: str) -> None:
+    """Write into every live tensor in place; the snapshot must not see it. Then restore the live state.
+
+    Forward passes mostly replace state tensors, so a snapshot that shares a tensor can survive a
+    continuation unnoticed and still be corrupted later by any in-place update. This writes directly.
+    """
+    for v in live.tensors().values():
+        v.add_(1.0)
+    for k, v in snap.tensors().items():
+        identical("checkpoint", f"snapshot isolated from in-place writes {k} {tag}", v, pristine[k])
+    for k, v in live.tensors().items():
+        v.copy_(pristine[k])
+
+
 def check_checkpoint(kind: str, W, seed: int, B: int, t: int, cs=None) -> None:
     """Snapshot at t; advance the live state with suffix A; then resume suffix B from the snapshot itself.
 
@@ -427,6 +457,7 @@ def check_checkpoint(kind: str, W, seed: int, B: int, t: int, cs=None) -> None:
     for k, v in snap.tensors().items():
         identical("checkpoint", f"snapshot equals live state {k} {tag}", v, pristine[k])
     equal("checkpoint", f"snapshot consumed {tag}", snap.consumed, t)
+    check_isolation(live, snap, pristine, tag)
     for name, suffix, target in (("A live", sa, live), ("B from snapshot", sb, snap)):
         sched = partitions(suffix.shape[1], rng)[-1]
         if target is snap:
@@ -451,6 +482,7 @@ def check_window_checkpoint(seed: int, w: int, t: int) -> None:
     for name, val in snap.tensors().items():
         identical("checkpoint", f"snapshot equals live state {name} {tag}", val, pristine[name])
     equal("checkpoint", f"snapshot consumed {tag}", snap.consumed, t)
+    check_isolation(live, snap, pristine, tag)
     live.forward(q[:, :, t:], k[:, :, t:], v[:, :, t:])
     for name, val in snap.tensors().items():
         identical("checkpoint", f"snapshot untouched {name} {tag}", val, pristine[name])
@@ -569,6 +601,9 @@ MUTATIONS = {
     "ssd_drops_carry_in": "a chunk ignores the state carried in from earlier chunks in its outputs",
     "ssd_state_no_decay": "the carried-in state is not decayed across a chunk",
     "snapshot_shallow": "Mamba-2 snapshot shares tensors with the live state",
+    "snapshot_shares_conv": "Mamba-2 snapshot shares only the convolution history with the live state",
+    "mamba_snapshot_shallow": "Mamba snapshot shares tensors with the live state",
+    "window_snapshot_shallow": "WindowKV snapshot shares its keys and values with the live state",
     "snapshot_drops_conv": "Mamba-2 snapshot resets the convolution history",
     "window_snapshot_resets_position": "WindowKV snapshot forgets how many tokens were consumed",
     "snapshot_negates": "Mamba snapshot stores the negated state (a second snapshot would undo it)",
@@ -655,6 +690,17 @@ def apply_mutation(name: str) -> None:
         impl.ssd_chunk = f
     elif name == "snapshot_shallow":
         impl.Mamba2State.snapshot = lambda self: impl.Mamba2State(self.conv, self.ssm, self.consumed)
+    elif name == "snapshot_shares_conv":
+        impl.Mamba2State.snapshot = lambda self: impl.Mamba2State(self.conv, self.ssm.clone(), self.consumed)
+    elif name == "mamba_snapshot_shallow":
+        impl.MambaState.snapshot = lambda self: impl.MambaState(self.conv, self.ssm, self.consumed)
+    elif name == "window_snapshot_shallow":
+        def f(self):
+            s = impl.WindowKV(self.w)
+            s.keys, s.values, s.consumed = self.keys, self.values, self.consumed
+            return s
+
+        impl.WindowKV.snapshot = f
     elif name == "snapshot_drops_conv":
         impl.Mamba2State.snapshot = lambda self: impl.Mamba2State(torch.zeros_like(self.conv), self.ssm.clone(),
                                                                   self.consumed)

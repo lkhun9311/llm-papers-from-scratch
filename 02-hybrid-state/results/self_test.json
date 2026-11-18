@@ -94,7 +94,7 @@
       "what": "a chunk ignores the state carried in from earlier chunks in its outputs",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "mamba2 output seed=0 G=1 cs=4 B=1 T=3 sched=[2, 1] chunk=1 mode=4: max abs diff 8.148e-03 exceeds atol=2e-06 rtol=2e-05",
+      "first_mismatch": "ssd_directed one chunk of 1024 tokens: max abs diff 2.749e+00 exceeds atol=1e-10 rtol=1e-09",
       "error": null
     },
     {
@@ -102,7 +102,7 @@
       "what": "the carried-in state is not decayed across a chunk",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "mamba2 ssm state seed=0 G=1 cs=4 B=1 T=3 sched=[2, 1] chunk=1 mode=4: max abs diff 1.467e-03 exceeds atol=2e-06 rtol=2e-05",
+      "first_mismatch": "ssd_directed one chunk of 1024 tokens final state: max abs diff 1.044e+00 exceeds atol=1e-10 rtol=1e-09",
       "error": null
     },
     {
@@ -110,7 +110,31 @@
       "what": "Mamba-2 snapshot shares tensors with the live state",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "checkpoint snapshot untouched ssm mamba2 seed=0 B=1 t=1 cs=None: not identical (96 elements differ)",
+      "first_mismatch": "checkpoint snapshot isolated from in-place writes conv mamba2 seed=0 B=1 t=1 cs=None: not identical (114 elements differ)",
+      "error": null
+    },
+    {
+      "mutation": "snapshot_shares_conv",
+      "what": "Mamba-2 snapshot shares only the convolution history with the live state",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint snapshot isolated from in-place writes conv mamba2 seed=0 B=1 t=1 cs=None: not identical (114 elements differ)",
+      "error": null
+    },
+    {
+      "mutation": "mamba_snapshot_shallow",
+      "what": "Mamba snapshot shares tensors with the live state",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint snapshot isolated from in-place writes conv mamba seed=0 B=1 t=1 cs=None: not identical (96 elements differ)",
+      "error": null
+    },
+    {
+      "mutation": "window_snapshot_shallow",
+      "what": "WindowKV snapshot shares its keys and values with the live state",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint snapshot isolated from in-place writes keys window seed=0 w=2 t=1: not identical (8 elements differ)",
       "error": null
     },
     {

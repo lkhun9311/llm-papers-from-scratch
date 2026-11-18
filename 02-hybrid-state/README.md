@@ -132,14 +132,14 @@ less state than an SSM.
 |---|---|
 | `impl.py` | `WindowKV`, `sliding_attention`, `causal_conv`, `mamba_forward`, `ssd_recurrent`, `ssd_chunk`/`ssd_chunked`, `mamba2_forward`, `gated_rms_norm`, `snapshot()` on every state, `state_bytes`/`expected_bytes`. Float64, torch only, no transformers. |
 | `oracle.py` | Tiny random one-layer Mistral, Longformer self-attention, Mamba and Mamba-2 mixers from transformers 5.22.2, run with the library's own caches; vLLM 0.34.0's gated-norm code. Copies weights into impl's plain classes. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 22 bugs and requires each to be reported. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 25 bugs and requires each to be reported. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 02-hybrid-state/check.py --out 02-hybrid-state/results/check.json
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 02-hybrid-state/check.py --self-test --out 02-hybrid-state/results/self_test.json
 ```
 
-The two commands take about 5 s and 60 s, with a peak RSS of about 600 MiB. The check pins
+The two commands take about 6 s and a little over a minute, with a peak RSS of about 600 MiB. The check pins
 transformers 5.22.2 and vLLM 0.34.0 (`g62d4bc3c7`) and refuses to run on other versions.
 
 ## 5. Checks and expected results
@@ -166,10 +166,10 @@ for the Mamba-2 gated norm. Random tiny models (hidden 16; Mamba `I` = 32, `N` =
 | mamba2 | Per chunk: output, SSM state, convolution history vs `Mamba2Mixer` + cache, impl in both token and chunked mode | `G` ∈ {1, 2}, chunk ∈ {4, 8}, multi-token continuations |
 | ssd core | `ssd_chunked` vs the library's `mamba2_chunk_scan`, nonzero initial state, finite Δ limits that clamp on both sides | 108 cases |
 | mixer variants | Whole Mamba-2 mixer with (a) a finite Δ limit that clamps on both sides, vs the library's one-call path, which applies it; (b) `norm_groups = G`, vs the library's mixer with its norm replaced by vLLM's. Each in token and chunked mode, one-shot / token-by-token / irregular | 36 cases |
-| ssd directed | A Δ of `1e16` next to a Δ of 1 in one chunk; the exact output is `exp(−1)` | 1 case |
+| ssd directed | A Δ of `1e16` next to a Δ of 1 in one chunk; the exact output is `exp(−1)`. One 1,024-token chunk vs the token-by-token form (the segment sums must stay `L²`, not `L³`) | 1 case |
 | vllm norm | `gated_rms_norm(groups=G)` vs vLLM `Mixer2RMSNormGated.forward_native` | `G` ∈ {1, 2, 4} |
 | partition | Any chunking = one call (outputs and final state) | all lengths |
-| checkpoint | Snapshot at `t` must equal a torch clone of the live state taken before `snapshot()` runs. Advance the live state with one suffix, check the snapshot did not move, then resume another suffix from the snapshot itself. Both must equal a fresh run over prefix + suffix, with exact token counts | `t` around window and chunk edges |
+| checkpoint | Snapshot at `t` must equal a torch clone of the live state taken before `snapshot()` runs. Advance the live state with one suffix, check the snapshot did not move, add 1 in place to every live tensor and check again, then resume another suffix from the snapshot itself. Both must equal a fresh run over prefix + suffix, with exact token counts | `t` around window and chunk edges |
 | sizes | `state_bytes` = `expected_bytes`; reference cache tensor sizes; each state tensor's storage is exactly its payload (no view keeping a larger buffer alive) | every step |
 
 A pass requires all 910 cases and minimum counts of window wraps, multi-chunk calls, short last chunks,
@@ -178,10 +178,10 @@ cases, suffixes resumed from a snapshot, and
 multi-token continuations counted separately for the Mistral reference, the Mamba-2 reference and the
 impl-only partition checks.
 
-**Result** (`results/check.json`): passed. The run makes about 56,000 comparisons and finds no
+**Result** (`results/check.json`): passed. The run makes about 57,000 comparisons and finds no
 mismatch.
 
-**Planted bugs** (`results/self_test.json`): all 22 are reported as mismatches.
+**Planted bugs** (`results/self_test.json`): all 25 are reported as mismatches.
 
 | Mutation | Caught by |
 |---|---|
@@ -198,8 +198,11 @@ mismatch.
 | B/C groups assigned round-robin | mamba2 output with `G = 2` |
 | chunk ignores carried-in state in its outputs | mamba2 multi-chunk |
 | carried-in state not decayed across a chunk | mamba2 state |
-| shallow snapshot | checkpoint isolation |
-| snapshot drops the convolution history | checkpoint resume |
+| shallow snapshot (Mamba-2) | checkpoint isolation |
+| Mamba-2 snapshot shares only the convolution history | in-place write to the live state |
+| shallow snapshot (Mamba) | in-place write to the live state |
+| window snapshot shares its keys and values | in-place write to the live state |
+| snapshot drops the convolution history | snapshot equals the live state |
 | window snapshot forgets its token count | checkpoint token count |
 | snapshot stores the negated state | snapshot equals the live state |
 | `consumed` overwritten instead of added | token count after a continuation |

@@ -292,9 +292,11 @@ def segment_sums(a: torch.Tensor) -> torch.Tensor:
     """
     l = a.shape[1]
     idx = torch.arange(l)
-    # between[t, u, k] = u < k <= t
-    between = (idx[None, None, :] > idx[None, :, None]) & (idx[None, None, :] <= idx[:, None, None])
-    seg = torch.einsum("tuk,bkh->btuh", between.to(a.dtype), a)
+    # Column u holds a_k only for k > u; a running sum down each column then starts at a_{u+1}.
+    # This needs B * l * l * H numbers, the same size as the score matrix, not l cubed.
+    after = idx[:, None] > idx[None, :]  # [k, u]
+    terms = a[:, :, None, :].expand(-1, l, l, -1).masked_fill(~after[None, :, :, None], 0.0)
+    seg = torch.cumsum(terms, dim=1)
     causal = idx[:, None] >= idx[None, :]
     return seg.masked_fill(~causal[None, :, :, None], float("-inf"))
 
