@@ -40,8 +40,21 @@ def norm(s: str) -> str:
 def arxiv_title(aid: str, version: str) -> str | None:
     """Title of that exact version, or None if the version does not exist."""
     url = f"https://export.arxiv.org/api/query?id_list={aid}{version}"
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
-        root = ET.fromstring(r.read())
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
+                root = ET.fromstring(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            # The API rate-limits with 429 or 503; wait and retry instead of failing the whole run.
+            # Any other status, or the fifth refusal, is raised and fails the check.
+            if e.code not in (429, 503) or attempt == 4:
+                raise
+            time.sleep(int(e.headers.get("Retry-After") or 0) or 15 * 2**attempt)
+        except (TimeoutError, urllib.error.URLError):
+            if attempt == 4:
+                raise
+            time.sleep(15 * 2**attempt)
     for entry in root.findall(f"{ATOM}entry"):
         eid = entry.findtext(f"{ATOM}id") or ""
         if eid.rstrip("/").endswith(f"{aid}{version}"):

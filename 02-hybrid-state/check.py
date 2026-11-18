@@ -65,7 +65,7 @@ SEEDS = (0, 1, 2)
 BATCHES = (1, 2)
 LENGTHS = (1, 3, 4, 5, 7, 8, 9, 17, 33)
 WINDOWS = (2, 4, 8)
-ONE_SIDED = (2, 3, 4)  # one_sided=1 (attention_window=2) crashes the library's chunked form
+ONE_SIDED = (2, 3, 4)  # one_sided=1 (attention_window=2) fails inside the library's chunked form
 GROUPS = (1, 2)
 CHUNKS = (4, 8)
 
@@ -77,7 +77,9 @@ MIN_COVERAGE = {
     "dt_clamped_low": 20,  # dt values the finite limit actually raised
     "dt_clamped_high": 20,  # dt values the finite limit actually lowered
     "two_group_cases": 20,
-    "resumed_suffixes": 50,
+    "resumed_suffixes": 50,  # suffixes resumed from a snapshot (not the live state)
+    "mixer_dt_clamped_low": 20,
+    "mixer_dt_clamped_high": 20,
     "window_reference_continuations": 50,  # a multi-token chunk after the first, run through Mistral
     "mamba2_reference_continuations": 50,  # the same, run through Mamba2Mixer
     "impl_continuations": 50,  # the same, impl-only partition checks
@@ -112,6 +114,12 @@ def identical(family: str, what: str, got: torch.Tensor, ref: torch.Tensor) -> N
     if got.shape != ref.shape or got.dtype != ref.dtype or not torch.equal(got, ref):
         n = int((got != ref).sum()) if got.shape == ref.shape else -1
         raise Mismatch(f"{family} {what}: not identical ({n} elements differ)")
+
+
+def compact(what: str, tensors: dict[str, torch.Tensor]) -> None:
+    """Each state tensor owns exactly its payload: no larger buffer kept alive behind a view."""
+    for k, t in tensors.items():
+        equal("sizes", f"storage of {k} {what}", t.untyped_storage().nbytes(), t.numel() * t.element_size())
 
 
 def equal(family: str, what: str, a, b) -> None:
@@ -163,6 +171,7 @@ def check_window(oracle, seed: int, w: int, B: int, T: int, rng: random.Random) 
             close("window_state", f"retained keys {tag}", kv.keys, s["keys"], TOL_ID)
             close("window_state", f"retained values {tag}", kv.values, s["values"], TOL_ID)
             equal("window_state", f"consumed {tag}", kv.consumed, s["seq_length"])
+            compact(tag, kv.tensors())
             equal("sizes", f"window bytes {tag}", impl.state_bytes(kv.tensors()),
                   impl.expected_bytes("window", batch=B, elem=8, consumed=kv.consumed, w=w,
                                       kv_heads=ref.kv_heads, head_dim=ref.head_dim))
@@ -225,6 +234,8 @@ def check_mamba(oracle, seed: int, B: int, T: int) -> None:
             close("mamba", f"ssm state {tag}", st.ssm, s["ssm"], TOL_REF)
             # The library keeps K conv columns; the oldest one is never read again.
             close("mamba_state", f"conv history {tag}", st.conv, s["conv"][..., 1:], TOL_ID)
+            equal("mamba_state", f"consumed {tag}", st.consumed, pos)
+            compact(tag, st.tensors())
             equal("sizes", f"mamba bytes {tag}", impl.state_bytes(st.tensors()),
                   impl.expected_bytes("mamba", batch=B, elem=8, I=I, K=K, N=N))
             equal("sizes", f"reference mamba numel {tag}", (s["conv"].numel(), s["ssm"].numel()),
@@ -255,6 +266,8 @@ def check_mamba2(oracle, seed: int, G: int, cs: int, B: int, T: int, rng: random
                 close("mamba2", f"output {tag}", y, s["out"], TOL_REF)
                 close("mamba2", f"ssm state {tag}", st.ssm, s["ssm"], TOL_REF)
                 close("mamba2_state", f"conv history {tag}", st.conv, s["conv"][..., 1:], TOL_ID)
+                equal("mamba2_state", f"consumed {tag}", st.consumed, pos)
+                compact(tag, st.tensors())
                 equal("sizes", f"mamba2 bytes {tag}", impl.state_bytes(st.tensors()),
                       impl.expected_bytes("mamba2", batch=B, elem=8, H=H, P=P, G=G, N=N, K=K))
                 equal("sizes", f"reference mamba2 numel {tag}", (s["conv"].numel(), s["ssm"].numel()),
@@ -293,6 +306,59 @@ def check_ssd_core(oracle, seed: int, G: int, cs: int, T: int) -> None:
     y2 = impl.ssd_recurrent(x, dt, A, impl.heads_from_groups(Bg, H), impl.heads_from_groups(Cg, H), D, S2)
     close("ssd_identity", f"chunked vs recurrent {tag}", y, y2, TOL_ID)
     close("ssd_identity", f"chunked vs recurrent state {tag}", S, S2, TOL_ID)
+
+
+def check_mamba2_mixer_variants(oracle, seed: int, G: int, cs: int, T: int) -> None:
+    """Whole-mixer checks for the two options the plain mamba2 family runs with defaults only.
+
+    1. A finite dt limit, chosen from this input so both bounds clamp, against the library's one-call
+       (chunk-scan) path, which applies the limit. impl must match it in every mode and schedule.
+    2. norm_groups = G against the library's mixer with its norm replaced by vLLM's grouped norm.
+    """
+    x = torch.randn(1, T, 16, dtype=DT, generator=torch.Generator().manual_seed(seed * 43 + T + G))
+    base = oracle.Mamba2Ref(seed, G, cs)
+    W0 = base.weights()
+    H = W0.num_heads
+    soft = torch.nn.functional.softplus((x @ W0.in_w.T)[..., -H:] + W0.dt_bias)
+    lim = (soft.quantile(0.25).item(), soft.quantile(0.75).item())
+    COUNT["mixer_dt_clamped_low"] += int((soft < lim[0]).sum())
+    COUNT["mixer_dt_clamped_high"] += int((soft > lim[1]).sum())
+    variants = (("dt_limit", oracle.Mamba2Ref(seed, G, cs, dt_limit=lim), {"dt_limit": lim}),
+                ("vllm_norm", oracle.Mamba2Ref(seed, G, cs, vllm_norm=True), {"norm_groups": G}))
+    for label, ref, change in variants:
+        W = dataclasses.replace(ref.weights(), **change)
+        for k in ("in_w", "conv_w", "dt_bias", "A_log", "D", "norm_w", "out_w"):
+            identical("mixer_variant", f"{label} weights {k} seed={seed}", getattr(W, k), getattr(W0, k))
+        want = ref.run(x, [T])[0]
+        for sched in ([T], [1] * T, partitions(T, random.Random(T))[-1]):
+            for mode in (None, cs):
+                outs, st = run_impl("mamba2", W, x, sched, chunk_size=mode)
+                tag = f"{label} seed={seed} G={G} cs={cs} T={T} sched={sched} mode={mode}"
+                close("mixer_variant", f"output {tag}", torch.cat(outs, 1), want["out"], TOL_REF)
+                close("mixer_variant", f"final ssm {tag}", st.ssm, want["ssm"], TOL_REF)
+
+
+def check_ssd_directed() -> None:
+    """A huge step next to a small one: a = dt * A = [-1e16, -1] in one chunk.
+
+    Token 1 injects dt*B*x = 1e16 * 1e-16 = 1; token 2 decays it by exp(-1) and reads it with C = 1.
+    The exact output at token 2 is exp(-1). Subtracting running sums gives s_2 - s_1 = 0 and output 1.
+    """
+    x = torch.ones(1, 2, 1, 1, dtype=DT)
+    dt = torch.tensor([[[1e16], [1.0]]], dtype=DT)
+    A = torch.tensor([-1.0], dtype=DT)
+    Bh = torch.tensor([1e-16, 0.0], dtype=DT).view(1, 2, 1, 1)
+    Ch = torch.ones(1, 2, 1, 1, dtype=DT)
+    D = torch.zeros(1, dtype=DT)
+    want = torch.tensor([1.0, math.exp(-1)], dtype=DT).view(1, 2, 1, 1)
+    for mode in ("recurrent", "chunked"):
+        S = torch.zeros(1, 1, 1, 1, dtype=DT)
+        if mode == "recurrent":
+            y = impl.ssd_recurrent(x, dt, A, Bh, Ch, D, S)
+        else:
+            y = impl.ssd_chunked(x, dt, A, Bh, Ch, D, S, 4)
+        close("ssd_directed", f"large dt {mode}", y, want, TOL_ID)
+        close("ssd_directed", f"large dt {mode} final state", S, torch.full_like(S, math.exp(-1)), TOL_ID)
 
 
 NORM_GROUPS = (1, 2, 4)
@@ -340,6 +406,11 @@ def state_clone(st) -> dict[str, torch.Tensor]:
 
 
 def check_checkpoint(kind: str, W, seed: int, B: int, t: int, cs=None) -> None:
+    """Snapshot at t; advance the live state with suffix A; then resume suffix B from the snapshot itself.
+
+    The baseline is cloned from the live state with torch before snapshot() runs, so a snapshot that
+    copies wrongly (shares, zeroes, transforms) differs from it, however snapshot() is written.
+    """
     g = torch.Generator().manual_seed(seed * 53 + t)
     prefix = torch.randn(B, t, 16, dtype=DT, generator=g)
     sa = torch.randn(B, 5, 16, dtype=DT, generator=g)
@@ -350,22 +421,22 @@ def check_checkpoint(kind: str, W, seed: int, B: int, t: int, cs=None) -> None:
         return torch.cat(run_impl(kind, W, x, [x.shape[1]], chunk_size=cs)[0], 1)
 
     _, live = run_impl(kind, W, prefix, [t], chunk_size=cs)
+    pristine = state_clone(live)
     snap = live.snapshot()
-    pristine = state_clone(snap)
-    for name, suffix in (("A", sa), ("B", sb)):
-        if name == "A":
-            target = live  # advance the live state; the snapshot must not move
-        else:
-            target = snap.snapshot()
+    tag = f"{kind} seed={seed} B={B} t={t} cs={cs}"
+    for k, v in snap.tensors().items():
+        identical("checkpoint", f"snapshot equals live state {k} {tag}", v, pristine[k])
+    equal("checkpoint", f"snapshot consumed {tag}", snap.consumed, t)
+    for name, suffix, target in (("A live", sa, live), ("B from snapshot", sb, snap)):
         sched = partitions(suffix.shape[1], rng)[-1]
+        if target is snap:
+            for k, v in snap.tensors().items():  # advancing the live state must not have moved it
+                identical("checkpoint", f"snapshot untouched {k} {tag}", v, pristine[k])
+            COUNT["resumed_suffixes"] += 1
         outs, _ = run_impl(kind, W, suffix, sched, st=target, chunk_size=cs)
-        COUNT["resumed_suffixes"] += 1
         whole = fresh(torch.cat([prefix, suffix], 1))
-        tag = f"{kind} seed={seed} B={B} t={t} suffix={name} sched={sched} cs={cs}"
-        close("checkpoint", f"resumed output {tag}", torch.cat(outs, 1), whole[:, t:], TOL_ID)
-        for k, v in snap.tensors().items():
-            identical("checkpoint", f"snapshot untouched {k} {tag}", v, pristine[k])
-        equal("checkpoint", f"snapshot consumed {tag}", snap.consumed, t)
+        close("checkpoint", f"output after {name} sched={sched} {tag}", torch.cat(outs, 1), whole[:, t:], TOL_ID)
+        equal("checkpoint", f"consumed after {name} {tag}", target.consumed, t + suffix.shape[1])
 
 
 def check_window_checkpoint(seed: int, w: int, t: int) -> None:
@@ -374,19 +445,20 @@ def check_window_checkpoint(seed: int, w: int, t: int) -> None:
     q, k, v = mk(t + 6, 4), mk(t + 6, 2), mk(t + 6, 2)
     live = impl.WindowKV(w)
     live.forward(q[:, :, :t], k[:, :, :t], v[:, :, :t])
+    pristine = state_clone(live)
     snap = live.snapshot()
-    pristine = state_clone(snap)
-    live.forward(q[:, :, t:], k[:, :, t:], v[:, :, t:])
-    resumed = snap.snapshot()
-    outs = [resumed.forward(q[:, :, i : i + 1], k[:, :, i : i + 1], v[:, :, i : i + 1]) for i in range(t, t + 6)]
-    dense = impl.sliding_attention(q, k, v, w)
-    COUNT["resumed_suffixes"] += 1
     tag = f"window seed={seed} w={w} t={t}"
-    close("checkpoint", f"resumed output {tag}", torch.cat(outs, 2), dense[:, :, t:], TOL_ID)
+    for name, val in snap.tensors().items():
+        identical("checkpoint", f"snapshot equals live state {name} {tag}", val, pristine[name])
+    equal("checkpoint", f"snapshot consumed {tag}", snap.consumed, t)
+    live.forward(q[:, :, t:], k[:, :, t:], v[:, :, t:])
     for name, val in snap.tensors().items():
         identical("checkpoint", f"snapshot untouched {name} {tag}", val, pristine[name])
-    equal("checkpoint", f"snapshot consumed {tag}", snap.consumed, t)
-    equal("checkpoint", f"resumed consumed {tag}", resumed.consumed, t + 6)
+    outs = [snap.forward(q[:, :, i : i + 1], k[:, :, i : i + 1], v[:, :, i : i + 1]) for i in range(t, t + 6)]
+    dense = impl.sliding_attention(q, k, v, w)
+    COUNT["resumed_suffixes"] += 1
+    close("checkpoint", f"resumed output {tag}", torch.cat(outs, 2), dense[:, :, t:], TOL_ID)
+    equal("checkpoint", f"resumed consumed {tag}", snap.consumed, t + 6)
 
 
 def check_partitions(kind: str, W, seed: int, B: int, T: int, rng, cs=None) -> None:
@@ -399,6 +471,7 @@ def check_partitions(kind: str, W, seed: int, B: int, T: int, rng, cs=None) -> N
         close("partition", f"outputs {tag}", torch.cat(outs, 1), one[0], TOL_ID)
         for k, v in st.tensors().items():
             close("partition", f"final {k} {tag}", v, st1.tensors()[k], TOL_ID)
+        equal("partition", f"consumed {tag}", st.consumed, T)
 
 
 # ================================================================================================
@@ -409,6 +482,8 @@ def check_partitions(kind: str, W, seed: int, B: int, T: int, rng, cs=None) -> N
 def run_all(oracle) -> dict:
     rng = random.Random(0)
     cases = Counter()
+    check_ssd_directed()
+    cases["ssd_directed"] += 1
     for seed in SEEDS:
         for w in WINDOWS:
             for B in BATCHES:
@@ -420,7 +495,7 @@ def run_all(oracle) -> dict:
                 cases["window_checkpoint"] += 1
         for r in ONE_SIDED:
             for B in BATCHES:
-                for blocks in (2, 3, 4, 6):  # the library's chunked form needs L >= 2 windows
+                for blocks in (1, 2, 3, 5):
                     check_longformer(oracle, seed, r, B, blocks)
                     cases["longformer"] += 1
         Wm = oracle.MambaRef(seed).weights()
@@ -447,6 +522,9 @@ def run_all(oracle) -> dict:
                 for T in LENGTHS:
                     check_ssd_core(oracle, seed, G, cs, T)
                     cases["ssd_core"] += 1
+                for T in (5, 9, 17):
+                    check_mamba2_mixer_variants(oracle, seed, G, cs, T)
+                    cases["mamba2_mixer_variants"] += 1
         for G in NORM_GROUPS:
             gap = check_vllm_norm(oracle, seed, G)
             NORM_GAP[G] = max(NORM_GAP.get(G, 0.0), gap)
@@ -467,6 +545,8 @@ EXPECTED_CASES = {
     "mamba2_checkpoint": len(SEEDS) * len(GROUPS) * len(CHUNKS) * len(BATCHES) * 4 * 2,
     "ssd_core": len(SEEDS) * len(GROUPS) * len(CHUNKS) * len(LENGTHS),
     "vllm_norm": len(SEEDS) * len(NORM_GROUPS),
+    "mamba2_mixer_variants": len(SEEDS) * len(GROUPS) * len(CHUNKS) * 3,
+    "ssd_directed": 1,
 }
 
 
@@ -491,6 +571,12 @@ MUTATIONS = {
     "snapshot_shallow": "Mamba-2 snapshot shares tensors with the live state",
     "snapshot_drops_conv": "Mamba-2 snapshot resets the convolution history",
     "window_snapshot_resets_position": "WindowKV snapshot forgets how many tokens were consumed",
+    "snapshot_negates": "Mamba snapshot stores the negated state (a second snapshot would undo it)",
+    "consumed_overwritten": "Mamba and Mamba-2 set consumed to the last chunk length instead of adding it",
+    "mixer_ignores_dt_limit": "Mamba-2 mixer runs with an unlimited dt whatever the weights say",
+    "mixer_ignores_norm_groups": "Mamba-2 mixer always normalises the whole width",
+    "ssd_running_sum_subtraction": "SSD chunk decays computed as exp(s_t - s_u) from running sums",
+    "conv_history_view": "convolution history kept as a view of the whole history ++ x buffer",
 }
 
 
@@ -581,6 +667,47 @@ def apply_mutation(name: str) -> None:
             return s
 
         impl.WindowKV.snapshot = f
+    elif name == "snapshot_negates":
+        impl.MambaState.snapshot = lambda self: impl.MambaState(-self.conv, -self.ssm, self.consumed)
+    elif name == "consumed_overwritten":
+        for fn in ("mamba_forward", "mamba2_forward"):
+            orig = getattr(impl, fn)
+
+            def f(W, x, st, *a, _orig=orig, **kw):
+                y = _orig(W, x, st, *a, **kw)
+                st.consumed = x.shape[1]
+                return y
+
+            setattr(impl, fn, f)
+    elif name == "mixer_ignores_dt_limit":
+        orig = impl.mamba2_forward
+        impl.mamba2_forward = lambda W, x, st, chunk_size=None: orig(
+            dataclasses.replace(W, dt_limit=(0.0, float("inf"))), x, st, chunk_size)
+    elif name == "mixer_ignores_norm_groups":
+        orig = impl.mamba2_forward
+        impl.mamba2_forward = lambda W, x, st, chunk_size=None: orig(
+            dataclasses.replace(W, norm_groups=1), x, st, chunk_size)
+    elif name == "ssd_running_sum_subtraction":
+        def seg(a):
+            s = torch.cumsum(a, dim=1)
+            l = a.shape[1]
+            causal = torch.ones(l, l, dtype=torch.bool).tril()
+            d = s[:, :, None, :] - s[:, None, :, :]
+            return d.masked_fill(~causal[None, :, :, None], float("-inf"))
+
+        impl.segment_sums = seg
+    elif name == "conv_history_view":
+        def f(h, x, w, b):
+            K = w.shape[1]
+            full = torch.cat([h, x], dim=2)
+            out = torch.zeros_like(x)
+            for k in range(K):
+                out = out + w[None, :, k, None] * full[:, :, k : k + x.shape[2]]
+            if b is not None:
+                out = out + b[None, :, None]
+            return out, full[:, :, full.shape[2] - (K - 1) :]
+
+        impl.causal_conv = f
     else:
         sys.exit(f"unknown mutation {name}; choose from {sorted(MUTATIONS)}")
 

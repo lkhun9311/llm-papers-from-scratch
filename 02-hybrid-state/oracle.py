@@ -188,7 +188,7 @@ class MambaRef:
 
 class Mamba2Ref:
     def __init__(self, seed: int, n_groups: int, chunk_size: int, dt_limit=(0.0, float("inf")),
-                 hidden=16, heads=4, head_dim=8, state=3, conv=4):
+                 vllm_norm: bool = False, hidden=16, heads=4, head_dim=8, state=3, conv=4):
         torch.manual_seed(seed)
         cfg = Mamba2Config(vocab_size=32, hidden_size=hidden, num_heads=heads, head_dim=head_dim, state_size=state,
                            conv_kernel=conv, expand=heads * head_dim // hidden, n_groups=n_groups,
@@ -197,6 +197,10 @@ class Mamba2Ref:
         self.mixer = self.model.backbone.layers[0].mixer
         _perturb(self.mixer)
         self.cfg = cfg
+        if vllm_norm:
+            # Same mixer, but its output norm is vLLM's per-group one instead of the whole-width one.
+            norm = self.mixer.norm
+            norm.forward = lambda hs, gate=None: vllm_gated_norm(hs, gate, norm.weight, norm.variance_epsilon, n_groups)
 
     def weights(self) -> impl.Mamba2Weights:
         m, c = self.mixer, self.cfg

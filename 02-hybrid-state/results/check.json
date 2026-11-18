@@ -19,6 +19,7 @@
     }
   },
   "cases": {
+    "ssd_directed": 1,
     "window": 162,
     "window_checkpoint": 36,
     "longformer": 72,
@@ -27,6 +28,7 @@
     "mamba2": 216,
     "mamba2_checkpoint": 192,
     "ssd_core": 108,
+    "mamba2_mixer_variants": 36,
     "vllm_norm": 9
   },
   "expected_cases": {
@@ -38,18 +40,22 @@
     "mamba2": 216,
     "mamba2_checkpoint": 192,
     "ssd_core": 108,
-    "vllm_norm": 9
+    "vllm_norm": 9,
+    "mamba2_mixer_variants": 36,
+    "ssd_directed": 1
   },
   "comparisons": {
-    "compare_checkpoint": 1908,
+    "compare_checkpoint": 2196,
     "compare_longformer": 72,
     "compare_mamba": 684,
     "compare_mamba2": 8504,
-    "compare_mamba2_state": 4252,
-    "compare_mamba_state": 342,
-    "compare_partition": 1440,
-    "compare_sizes": 12404,
+    "compare_mamba2_state": 8504,
+    "compare_mamba_state": 684,
+    "compare_mixer_variant": 1368,
+    "compare_partition": 1920,
+    "compare_sizes": 24808,
     "compare_ssd_core": 216,
+    "compare_ssd_directed": 4,
     "compare_ssd_identity": 216,
     "compare_vllm_norm": 9,
     "compare_window": 1608,
@@ -58,13 +64,15 @@
   },
   "max_error_over_tolerance": {
     "checkpoint": 1.6e-05,
-    "longformer": 0.016,
+    "longformer": 0.0162,
     "mamba": 0.113,
     "mamba2": 0.146,
     "mamba2_state": 1e-05,
     "mamba_state": 2.66e-06,
+    "mixer_variant": 0.131,
     "partition": 2.86e-05,
     "ssd_core": 0.227,
+    "ssd_directed": 0.0,
     "ssd_identity": 1.18e-05,
     "vllm_norm": 0.00732,
     "window": 0.000655,
@@ -73,13 +81,15 @@
   },
   "coverage": {
     "window_wraps": 729,
-    "ssd_multi_chunk_calls": 755,
-    "ssd_short_last_chunk": 4857,
-    "ssd_nonzero_carry_in": 3705,
+    "ssd_multi_chunk_calls": 851,
+    "ssd_short_last_chunk": 5841,
+    "ssd_nonzero_carry_in": 4497,
     "dt_clamped_low": 2088,
     "dt_clamped_high": 2088,
     "two_group_cases": 108,
-    "resumed_suffixes": 468,
+    "resumed_suffixes": 252,
+    "mixer_dt_clamped_low": 372,
+    "mixer_dt_clamped_high": 372,
     "window_reference_continuations": 265,
     "mamba2_reference_continuations": 341,
     "impl_continuations": 441
@@ -93,6 +103,8 @@
     "dt_clamped_high": 20,
     "two_group_cases": 20,
     "resumed_suffixes": 50,
+    "mixer_dt_clamped_low": 20,
+    "mixer_dt_clamped_high": 20,
     "window_reference_continuations": 50,
     "mamba2_reference_continuations": 50,
     "impl_continuations": 50
@@ -117,6 +129,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 4.6,
-  "peak_rss_mib": 583
+  "seconds": 5.2,
+  "peak_rss_mib": 585
 }

@@ -102,6 +102,11 @@ inside the chunk, recurrent between chunks. `impl.ssd_chunk` writes out the thre
 chunk, the carried-in state, and the `D` skip. It also writes out the state handed to the next chunk.
 `check.py` checks that it equals the token-by-token form.
 
+The decay `exp(s_t − s_u)` is computed as `exp(a_{u+1} + … + a_t)`, summing only the terms between
+`u` and `t`. Subtracting two running sums loses a small decay that sits next to a huge one: with
+`a = [−1e16, −1]`, `s_2 − s_1` rounds to 0 instead of −1. The library uses the same masked
+segment-sum form (`segment_sum` in `modeling_mamba2.py`).
+
 After the scan: `out = W_out · RMSNorm(y ⊙ silu(z))`. The gate comes before the norm. Which slice the
 norm spans differs between implementations (§6).
 
@@ -127,14 +132,14 @@ less state than an SSM.
 |---|---|
 | `impl.py` | `WindowKV`, `sliding_attention`, `causal_conv`, `mamba_forward`, `ssd_recurrent`, `ssd_chunk`/`ssd_chunked`, `mamba2_forward`, `gated_rms_norm`, `snapshot()` on every state, `state_bytes`/`expected_bytes`. Float64, torch only, no transformers. |
 | `oracle.py` | Tiny random one-layer Mistral, Longformer self-attention, Mamba and Mamba-2 mixers from transformers 5.22.2, run with the library's own caches; vLLM 0.34.0's gated-norm code. Copies weights into impl's plain classes. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 16 bugs and requires each to be reported. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 22 bugs and requires each to be reported. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 02-hybrid-state/check.py --out 02-hybrid-state/results/check.json
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 02-hybrid-state/check.py --self-test --out 02-hybrid-state/results/self_test.json
 ```
 
-The two commands take about 5 s and 40 s, with a peak RSS of about 600 MiB. The check pins
+The two commands take about 5 s and 60 s, with a peak RSS of about 600 MiB. The check pins
 transformers 5.22.2 and vLLM 0.34.0 (`g62d4bc3c7`) and refuses to run on other versions.
 
 ## 5. Checks and expected results
@@ -156,24 +161,27 @@ for the Mamba-2 gated norm. Random tiny models (hidden 16; Mamba `I` = 32, `N` =
 | Family | What is compared | Matrix |
 |---|---|---|
 | window | Per chunk: attention output vs Mistral, retained keys/values (shape and values) vs `DynamicSlidingWindowLayer`, token count; dense masked = rolling | `w` ∈ {2, 4, 8}, lengths 1–33, one-shot / prefill + decode / irregular chunks |
-| longformer | Local attention output vs `LongformerSelfAttention` | `r` ∈ {2, 3, 4}, 2–6 windows |
+| longformer | Local attention output vs `LongformerSelfAttention` | `r` ∈ {2, 3, 4}, 1–5 windows |
 | mamba | Per chunk: output, SSM state, convolution history vs `MambaMixer` + cache | prefill + single-token decode |
 | mamba2 | Per chunk: output, SSM state, convolution history vs `Mamba2Mixer` + cache, impl in both token and chunked mode | `G` ∈ {1, 2}, chunk ∈ {4, 8}, multi-token continuations |
 | ssd core | `ssd_chunked` vs the library's `mamba2_chunk_scan`, nonzero initial state, finite Δ limits that clamp on both sides | 108 cases |
+| mixer variants | Whole Mamba-2 mixer with (a) a finite Δ limit that clamps on both sides, vs the library's one-call path, which applies it; (b) `norm_groups = G`, vs the library's mixer with its norm replaced by vLLM's. Each in token and chunked mode, one-shot / token-by-token / irregular | 36 cases |
+| ssd directed | A Δ of `1e16` next to a Δ of 1 in one chunk; the exact output is `exp(−1)` | 1 case |
 | vllm norm | `gated_rms_norm(groups=G)` vs vLLM `Mixer2RMSNormGated.forward_native` | `G` ∈ {1, 2, 4} |
 | partition | Any chunking = one call (outputs and final state) | all lengths |
-| checkpoint | Snapshot at `t`, advance the live state, resume two suffixes from the snapshot: each equals a fresh run over prefix + suffix, the snapshot is unchanged, and its token count is `t` | `t` around window and chunk edges |
-| sizes | `state_bytes` = `expected_bytes`; reference cache tensor sizes | every step |
+| checkpoint | Snapshot at `t` must equal a torch clone of the live state taken before `snapshot()` runs. Advance the live state with one suffix, check the snapshot did not move, then resume another suffix from the snapshot itself. Both must equal a fresh run over prefix + suffix, with exact token counts | `t` around window and chunk edges |
+| sizes | `state_bytes` = `expected_bytes`; reference cache tensor sizes; each state tensor's storage is exactly its payload (no view keeping a larger buffer alive) | every step |
 
-A pass requires all 873 cases and minimum counts of window wraps, multi-chunk calls, short last chunks,
-nonzero carried-in states, Δ values clamped low and high, two-group cases, resumed suffixes, and
+A pass requires all 910 cases and minimum counts of window wraps, multi-chunk calls, short last chunks,
+nonzero carried-in states, Δ values clamped low and high (in the core and in the mixer), two-group
+cases, suffixes resumed from a snapshot, and
 multi-token continuations counted separately for the Mistral reference, the Mamba-2 reference and the
 impl-only partition checks.
 
-**Result** (`results/check.json`): passed. The run makes about 37,000 comparisons and finds no
+**Result** (`results/check.json`): passed. The run makes about 56,000 comparisons and finds no
 mismatch.
 
-**Planted bugs** (`results/self_test.json`): all 16 are reported as mismatches.
+**Planted bugs** (`results/self_test.json`): all 22 are reported as mismatches.
 
 | Mutation | Caught by |
 |---|---|
@@ -186,13 +194,19 @@ mismatch.
 | Mamba without `D` skip | mamba output |
 | Mamba-2 Δ limit ignored | ssd core (finite limits) |
 | norm before gate | mamba2 output |
-| norm groups ignored | vllm norm |
+| norm groups ignored | mixer with vLLM's norm |
 | B/C groups assigned round-robin | mamba2 output with `G = 2` |
 | chunk ignores carried-in state in its outputs | mamba2 multi-chunk |
 | carried-in state not decayed across a chunk | mamba2 state |
 | shallow snapshot | checkpoint isolation |
 | snapshot drops the convolution history | checkpoint resume |
 | window snapshot forgets its token count | checkpoint token count |
+| snapshot stores the negated state | snapshot equals the live state |
+| `consumed` overwritten instead of added | token count after a continuation |
+| mixer ignores the Δ limit | mixer with a finite Δ limit |
+| mixer ignores `norm_groups` | mixer with vLLM's norm |
+| SSD decays from running-sum subtraction | ssd directed |
+| convolution history kept as a view of the whole buffer | storage size |
 
 **Things the reference does that a test has to work around.**
 
@@ -214,10 +228,10 @@ mismatch.
   ([`cache_utils.py#L245`](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/cache_utils.py#L245))
   although its docstring says `sliding_window`. `get_seq_length()` reports all tokens seen, not the
   number held.
-- `LongformerSelfAttention` called directly needs at least two windows of input, and it fails for
-  `attention_window = 2` because of the slice at
-  [#L794](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/models/longformer/modeling_longformer.py#L794).
-  So the matrix uses `r ≥ 2` and two or more windows.
+- `LongformerSelfAttention` fails for `attention_window = 2` (`r = 1`): at
+  [#L794](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/models/longformer/modeling_longformer.py#L794)
+  the slice `1 - window_overlap :` becomes `0 :` and the shapes no longer match. So the matrix uses
+  `r ≥ 2`.
 
 ## 6. In the engines
 
@@ -226,7 +240,7 @@ vLLM v0.34.0 (commit `62d4bc3c7e33b1b6c906e233e6af2d3506c482ca`):
 | Topic | vLLM code | Agreement |
 |---|---|---|
 | State shapes, conv history `K − 1` | [`mamba_utils.py` `mamba1_state_shape`](https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/mamba/mamba_utils.py#L179), [`mamba2_state_shape`](https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/mamba/mamba_utils.py#L194) | Same `K − 1` as impl's `expected_bytes` (read from source, not executed) |
-| Mamba-2 gated norm, per group | [`mamba_mixer2.py` `Mixer2RMSNormGated`](https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/mamba/mamba_mixer2.py#L88) | impl with `norm_groups = n_groups` matches `forward_native`, run on CPU (3 group counts × 3 seeds) |
+| Mamba-2 gated norm, per group | [`mamba_mixer2.py` `Mixer2RMSNormGated`](https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/mamba/mamba_mixer2.py#L88) | impl with `norm_groups = n_groups` matches `forward_native` run on CPU, alone (3 group counts × 3 seeds) and inside the whole mixer |
 | Δ limit | [`mamba_mixer2.py` prefill passes `dt_limit=(0.0, inf)`](https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/model_executor/layers/mamba/mamba_mixer2.py#L884) | vLLM applies no finite limit on either path, so the transformers inconsistency in §5 does not arise there (read from source) |
 | Sliding window, tokens skipped | [`single_type_kv_cache_manager.py` `SlidingWindowManager.get_num_skipped_tokens`](https://github.com/vllm-project/vllm/blob/62d4bc3c7e33b1b6c906e233e6af2d3506c482ca/vllm/v1/core/single_type_kv_cache_manager.py#L1153) | `t − w + 1` tokens are dropped before token `t` is computed, which is the same `w − 1` past tokens as impl (read from source; block-level freeing is out of scope) |
 
@@ -235,7 +249,7 @@ vLLM v0.34.0 (commit `62d4bc3c7e33b1b6c906e233e6af2d3506c482ca`):
 ([`modeling_mamba2.py#L105`](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/models/mamba2/modeling_mamba2.py#L105))
 normalizes the full expanded width at once. vLLM normalizes each group's `I/G` slice separately. So
 does the original Mamba-2 code:
-[`RMSNormGated(..., group_size=self.d_ssm // ngroups)`](https://github.com/state-spaces/mamba/blob/v2.2.4/mamba_ssm/modules/mamba2.py#L144).
+[`RMSNormGated(..., group_size=self.d_ssm // ngroups)`](https://github.com/state-spaces/mamba/blob/v2.2.4/mamba_ssm/modules/mamba2.py#L144-L145).
 The two forms agree only when `n_groups = 1`.
 
 On the same inputs, the full-width form differs from vLLM's by up to 2.6 in absolute value for

@@ -131,7 +131,9 @@ def causal_conv(history: torch.Tensor, x: torch.Tensor, weight: torch.Tensor, bi
         out = out + weight[None, :, k, None] * full[:, :, k : k + L]
     if bias is not None:
         out = out + bias[None, :, None]
-    return out, full[:, :, full.shape[2] - (K - 1) :]
+    # Copy the tail: a slice would keep the whole history ++ x buffer alive, so the state would
+    # grow with the prefill length even though only K - 1 columns are meaningful.
+    return out, full[:, :, full.shape[2] - (K - 1) :].clone()
 
 
 def gated_rms_norm(y: torch.Tensor, z: torch.Tensor, weight: torch.Tensor, eps: float, groups: int) -> torch.Tensor:
@@ -282,6 +284,21 @@ def ssd_recurrent(x, dt, A, Bh, Ch, D, S):
     return torch.stack(ys, dim=1)
 
 
+def segment_sums(a: torch.Tensor) -> torch.Tensor:
+    """seg[b, t, u, h] = a[b, u+1, h] + ... + a[b, t, h] for u <= t (0 on the diagonal), -inf above it.
+
+    Summing only the terms between u and t, instead of subtracting two running sums s_t - s_u, keeps a
+    small decay exact next to a huge one: with a = [-1e16, -1], s_2 - s_1 rounds to 0, not -1.
+    """
+    l = a.shape[1]
+    idx = torch.arange(l)
+    # between[t, u, k] = u < k <= t
+    between = (idx[None, None, :] > idx[None, :, None]) & (idx[None, None, :] <= idx[:, None, None])
+    seg = torch.einsum("tuk,bkh->btuh", between.to(a.dtype), a)
+    causal = idx[:, None] >= idx[None, :]
+    return seg.masked_fill(~causal[None, :, :, None], float("-inf"))
+
+
 def ssd_chunk(x, dt, A, Bh, Ch, D, S):
     """One chunk of SSD as matrix products. Same arguments as ssd_recurrent; S is updated in place.
 
@@ -291,20 +308,17 @@ def ssd_chunk(x, dt, A, Bh, Ch, D, S):
               + D x_t
         S_out = exp(s_last) S_in + sum_u exp(s_last - s_u) dt_u x_u (outer) B_u
     The first term is attention-like: a causal L x L matrix of scores (C_t . B_u) times a decay mask.
+    The decays exp(s_t - s_u) are computed from segment sums, not from that subtraction (see segment_sums).
     """
     a = dt * A  # [B, l, H], all <= 0
-    s = torch.cumsum(a, dim=1)
-    l = x.shape[1]
-    causal = torch.ones(l, l, dtype=torch.bool).tril()
-    seg = s[:, :, None, :] - s[:, None, :, :]  # [B, t, u, H]
-    # Entries above the diagonal would be exp(positive); clamp before exp, then zero them.
-    decay = torch.exp(seg.clamp(max=0)) * causal[None, :, :, None]
-    scores = torch.einsum("bthn,buhn->btuh", Ch, Bh) * decay
+    s = torch.cumsum(a, dim=1)  # decay from the chunk start, used for the carried-in state
+    seg = segment_sums(a)  # [B, t, u, H]; exp(-inf) = 0 masks the future
+    scores = torch.einsum("bthn,buhn->btuh", Ch, Bh) * torch.exp(seg)
     xdt = x * dt[..., None]
     y = torch.einsum("btuh,buhp->bthp", scores, xdt)
     y = y + torch.exp(s)[..., None] * torch.einsum("bhpn,bthn->bthp", S, Ch)
     y = y + D[:, None] * x
-    to_end = torch.exp(s[:, -1:, :] - s)  # [B, l, H]
+    to_end = torch.exp(seg[:, -1])  # [B, l, H]: decay from each token to the chunk end
     S.mul_(torch.exp(s[:, -1])[:, :, None, None])
     S.add_(torch.einsum("blh,blhp,blhn->bhpn", to_end, xdt, Bh))
     return y
