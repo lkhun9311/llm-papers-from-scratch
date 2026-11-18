@@ -1,0 +1,102 @@
+{
+  "check": "03 self-test: every planted bug must be reported as a mismatch",
+  "mutations": [
+    {
+      "mutation": "ratio_inverted",
+      "what": "accept with probability q(x)/p(x) instead of p(x)/q(x)",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "hf_sampling accepted seed=0 k=1 V=4 scale=0.5 kind=random: 1 != 0",
+      "error": null
+    },
+    {
+      "mutation": "residual_abs",
+      "what": "resample from norm(|p - q|) instead of norm(max(p - q, 0))",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "hf_sampling tokens seed=0 k=1 V=16 scale=3.0 kind=close: [11] != [9]",
+      "error": null
+    },
+    {
+      "mutation": "residual_is_p",
+      "what": "resample a rejected position from p instead of the residual",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "hf_sampling tokens seed=0 k=1 V=16 scale=3.0 kind=random: [11] != [9]",
+      "error": null
+    },
+    {
+      "mutation": "bonus_wrong_row",
+      "what": "the bonus token is drawn from p_{k-1} instead of p_k",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "hf_sampling tokens seed=0 k=1 V=4 scale=3.0 kind=close: [0, 0] != [0, 3]",
+      "error": null
+    },
+    {
+      "mutation": "continue_after_reject",
+      "what": "count every accepted draft instead of stopping at the first rejection",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "hf_sampling accepted seed=0 k=3 V=4 scale=0.5 kind=random: 2 != 0",
+      "error": null
+    },
+    {
+      "mutation": "greedy_shifted",
+      "what": "greedy compares draft i with the target's argmax at position i + 1",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "vllm_greedy accepted seed=0 k=1 V=16 row=1 draft_logits=True: 1 != 0",
+      "error": null
+    },
+    {
+      "mutation": "uniforms_float32",
+      "what": "the acceptance uniforms are drawn in float32",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "hf_sampling tokens seed=0 k=1 V=4 scale=2.0 kind=same: [0, 2] != [0, 3]",
+      "error": null
+    },
+    {
+      "mutation": "kv_rollback_keeps_one",
+      "what": "attention rollback forgets one token fewer than asked",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rollback consumed after rollback attn seed=0 t=1 extra=3 drop=1 calls=1: 4 != 3",
+      "error": null
+    },
+    {
+      "mutation": "mamba_rollback_no_restore",
+      "what": "Mamba rollback trims its snapshots but keeps the latest state",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rollback consumed after rollback mamba seed=0 t=1 extra=3 drop=1 calls=1: 4 != 3",
+      "error": null
+    },
+    {
+      "mutation": "draft_drop_off_by_one",
+      "what": "after a rejection the draft forgets k - accepted tokens instead of k - 1 - accepted",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "generation draft consumed on return attn<-attn k=1 plen=1 seed=0: 0 != 14",
+      "error": null
+    },
+    {
+      "mutation": "temperature_ignored",
+      "what": "probs() ignores the temperature",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "vllm_sampled seed=1 k=3 V=8 T=0.7 draft_logits=True n=4000: a cell is 17.2 standard errors from its exact probability",
+      "error": null
+    },
+    {
+      "mutation": "enumeration_keeps_q",
+      "what": "the exact round distribution accepts each draft with probability q(x), not min(p, q)",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "theorem seed=0 V=2 k=1 L=2 kind=random: max abs diff 1.153e-01 exceeds atol=1e-12 rtol=1e-10",
+      "error": null
+    }
+  ],
+  "passed": true
+}
