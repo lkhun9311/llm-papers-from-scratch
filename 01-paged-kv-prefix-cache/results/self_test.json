@@ -104,6 +104,14 @@
       "caught": true,
       "first_mismatch": "seed=0 B=4 N=12 op#0 admit r0 returned block ids: impl=[0, 0, 0] vllm=[1, 2, 3]",
       "error": null
+    },
+    {
+      "mutation": "release_resets_computed",
+      "what": "releasing a sequence also resets its computed-token count",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "release r0 computed: impl=0 vllm=10",
+      "error": null
     }
   ],
   "passed": true

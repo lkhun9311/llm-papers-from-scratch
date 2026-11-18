@@ -208,6 +208,10 @@ def run_trace(seed: int, block_size: int, num_blocks: int, num_ops: int) -> dict
         s, req = running.pop(sid)
         mine.free_seq(s)
         ref.free_seq(req)
+        # The released request itself, before the driver resets or drops it.
+        compare(f"release {sid} computed", s.num_computed, req.num_computed_tokens)
+        compare(f"release {sid} tokens", s.tokens, list(req.all_token_ids))
+        compare(f"release {sid} block table", s.block_table, ref.block_table(sid))
         if requeue:
             s.num_computed = 0
             req.num_computed_tokens = 0
@@ -312,6 +316,7 @@ MUTATIONS = {
     "concat_serialization": "serialize block tokens without delimiters, so [1, 2345] == [1234, 5]",
     "lookup_evicts": "lookup drops the identity of the free block at the head of the queue",
     "wrong_return_ids": "allocate returns the null block id instead of the blocks it allocated",
+    "release_resets_computed": "releasing a sequence also resets its computed-token count",
 }
 
 
@@ -440,6 +445,14 @@ def apply_mutation(name: str) -> None:
             return out if not out else [0] * len(out)
 
         K.allocate = allocate
+    elif name == "release_resets_computed":
+        orig_free = K.free_seq
+
+        def free_seq(self, seq):
+            orig_free(self, seq)
+            seq.num_computed = 0
+
+        K.free_seq = free_seq
     else:
         sys.exit(f"unknown mutation {name}; choose from {sorted(MUTATIONS)}")
 

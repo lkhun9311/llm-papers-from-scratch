@@ -87,6 +87,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 84.77,
-  "peak_rss_mib": 534.8
+  "seconds": 86.55,
+  "peak_rss_mib": 535.0
 }

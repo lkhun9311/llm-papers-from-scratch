@@ -146,7 +146,8 @@ hash chains (`block_digest` over the tokens for `impl.py`, `Request.block_hashes
 what the cache recorded when it registered a block. So the two sides share no hashing code, a block
 registered under the wrong identity shows up as a wrong prefix, and two prefixes sharing one digest are
 reported as a collision. State is also compared right after every allocation, before the driver does
-any bookkeeping, and the block ids each allocation returns must be equal. A lookup, and a refused
+any bookkeeping, and the block ids each allocation returns must be equal. A released request is compared
+right after both sides release it, before the driver resets or drops it. A lookup, and a refused
 allocation, must leave the full raw state of both sides (including tokens and per-request hashes)
 exactly as it was before the call.
 
@@ -178,7 +179,7 @@ the last-token rule gave up a cached block, evictions, and duplicate cached bloc
 decodes, 29,784 finishes, and 15,357 preemptions, of which 1,380 came from a refused decode. Coverage:
 19,052 lookups with a hit (163,900 hit tokens), 235 lookups capped by the last-token rule, 53,178
 evictions, and 242 duplicate cached blocks. All five directed cases matched on both sides. The run took
-85 s with a peak RSS of 535 MiB.
+87 s with a peak RSS of 535 MiB.
 
 **Self-test** ([results/self_test.json](results/self_test.json)): **passed**. Each planted bug was
 reported as a mismatch:
@@ -198,6 +199,7 @@ reported as a mismatch:
 | A successful allocation changes the computed-token count | state right after allocation |
 | A lookup drops the identity of the next block to be evicted | state after lookup |
 | Allocation returns the null block id instead of the new blocks | returned block ids |
+| Releasing a sequence also resets its computed-token count | released request state |
 
 ## 6. In the engines
 
