@@ -161,7 +161,7 @@ for the Mamba-2 gated norm. Random tiny models (hidden 16; Mamba `I` = 32, `N` =
 | Family | What is compared | Matrix |
 |---|---|---|
 | window | Per chunk: attention output vs Mistral, retained keys/values (shape and values) vs `DynamicSlidingWindowLayer`, token count; dense masked = rolling | `w` ∈ {2, 4, 8}, lengths 1–33, one-shot / prefill + decode / irregular chunks |
-| window `w = 1` | impl only (the reference mishandles it, below): every output equals the token's own value, nothing is retained, exact token count | lengths 1–33, every chunking |
+| window `w = 1` | impl only (the reference mishandles it, below): every output equals the token's own value, nothing is retained, exact token count | lengths 1–33, one-shot / prefill + decode / irregular chunks |
 | longformer | Local attention output vs `LongformerSelfAttention` | `r` ∈ {2, 3, 4}, 1–5 windows |
 | mamba | Per chunk: output, SSM state, convolution history vs `MambaMixer` + cache | prefill + single-token decode |
 | mamba2 | Per chunk: output, SSM state, convolution history vs `Mamba2Mixer` + cache, impl in both token and chunked mode | `G` ∈ {1, 2}, chunk ∈ {4, 8}, multi-token continuations |
@@ -169,7 +169,7 @@ for the Mamba-2 gated norm. Random tiny models (hidden 16; Mamba `I` = 32, `N` =
 | mixer variants | Whole Mamba-2 mixer with (a) a finite Δ limit that clamps on both sides, vs the library's one-call path, which applies it; (b) `norm_groups = G`, vs the library's mixer with its norm replaced by vLLM's. Each in token and chunked mode, one-shot / token-by-token / irregular | 36 cases |
 | ssd directed | A Δ of `1e16` next to a Δ of 1 in one chunk; the exact output is `exp(−1)`. One 1,024-token chunk vs the token-by-token form (the segment sums must stay `L²`, not `L³`) | 1 case |
 | vllm norm | `gated_rms_norm(groups=G)` vs vLLM `Mixer2RMSNormGated.forward_native` | `G` ∈ {1, 2, 4} |
-| partition | Any chunking = one call (outputs and final state) | all lengths |
+| partition | Prefill + decode and an irregular split = one call (outputs and final state) | all lengths |
 | checkpoint | Snapshot at `t` must equal a torch clone of the live state taken before `snapshot()` runs, and `snapshot()` must leave the live state (tensors, window, token count) as it was. Add 1 in place to every live tensor: the snapshot must not change; then restore the live state. Advance the live state with one suffix, check the snapshot did not move, then resume another suffix from the snapshot itself. Both continuations must equal a fresh run over prefix + suffix, with exact token counts | `t` around window and chunk edges; windows `w` ∈ {1, 2, 4, 8} |
 | sizes | `state_bytes` = `expected_bytes`; reference cache tensor sizes; each state tensor's storage is exactly its payload (no view keeping a larger buffer alive) | every step |
 
@@ -222,7 +222,7 @@ mismatch.
   Only the one-token path reads the cached state
   ([#L442](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/models/mamba/modeling_mamba.py#L442)).
   So reference schedules for Mamba are a prefill followed by single tokens. impl continues correctly
-  from any chunk size, which the partition check covers.
+  from multi-token chunks, which the partition check covers.
 - The Mamba-2 chunk scan clamps Δ to `time_step_limit`
   ([#L276](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/models/mamba2/modeling_mamba2.py#L276)).
   The one-token update does not

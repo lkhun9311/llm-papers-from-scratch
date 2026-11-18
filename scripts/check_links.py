@@ -20,15 +20,15 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")  # any target; the host decides which rules apply
 ARXIV_ANY = re.compile(r"https?://(?:www\.)?arxiv\.org/(abs|pdf|html)/([0-9]{4}\.[0-9]{4,5})(v[0-9]+)?(?:\.pdf)?/?$")
 GH_PIN = re.compile(r"https://github\.com/[^/]+/[^/]+/(blob|tree)/([^/]+)(/.*)?$")
-GH_ANY = re.compile(r"https?://(?:www\.)?github\.com/", re.IGNORECASE)
 SHA = re.compile(r"^[0-9a-f]{40}$")
 TAG = re.compile(r"^v?[0-9]+(\.[0-9]+)*([.-]?[A-Za-z0-9]+)*$")
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -88,13 +88,22 @@ def http_ok(url: str) -> bool:
         return False
 
 
+def host(url: str) -> str:
+    """Lower-case host without port or userinfo, so HTTPS://GitHub.com:443/ and github.com match alike."""
+    try:
+        return (urllib.parse.urlsplit(url).hostname or "").rstrip(".")
+    except ValueError:
+        return ""
+
+
 def check_file(path: Path, offline: bool, errors: list[str]) -> int:
     n = 0
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         for text, url in LINK.findall(line):
             where = f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}"
             m = ARXIV_ANY.match(url)
-            if "arxiv.org" in url.lower():
+            h = host(url)
+            if h == "arxiv.org" or h.endswith(".arxiv.org"):
                 n += 1
                 if not m or not url.startswith("https://arxiv.org/abs/") or not m.group(3):
                     errors.append(f"{where}: arXiv link must be https://arxiv.org/abs/<id>v<N>: {url}")
@@ -108,7 +117,7 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
                     errors.append(f"{where}: arXiv {aid}{ver} does not exist")
                 elif norm(title) != norm(text):
                     errors.append(f"{where}: title mismatch for {aid}{ver}\n    link text: {text}\n    arXiv:     {norm(title)}")
-            elif GH_ANY.match(url):
+            elif h == "github.com" or h.endswith(".github.com"):
                 if not url.startswith("https://github.com/"):
                     n += 1
                     errors.append(f"{where}: GitHub link must start with https://github.com/: {url}")
