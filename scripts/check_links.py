@@ -6,7 +6,9 @@ Rules (each violation is printed and makes the exit status 1):
   arXiv   - must be an inline [title](url) link to an abs page with a version: https://arxiv.org/abs/2104.09864v5
           - the version must exist, and the link text must equal the paper title from the arXiv API
             (case and whitespace ignored), so a wrong ID cannot hide behind a plausible title
-  GitHub  - a blob/tree link must be pinned: a 40-hex commit or a tag that looks like a version (v1.2.3, 1.2)
+  GitHub  - only github.com; allowed kinds: org, repo, issues, pull requests, releases under a version tag,
+            and blob/tree links (raw, blame, commits/<branch> and others fail)
+          - a blob/tree link must be pinned: a 40-hex commit or a tag that looks like a version (v1.2.3, 1.2)
             never a branch name such as main/master
           - the pinned URL must answer HTTP 200
 Run with --offline to apply only the format rules (no network).
@@ -32,6 +34,12 @@ REPO = Path(__file__).resolve().parent.parent
 URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>()\[\]\"'`]+")
 # Inline links [text](url), [text](<url>) and [text](url "title"): gives the text for the arXiv title rule.
 INLINE = re.compile(r"\[([^\]]+)\]\(\s*<?")
+# Any mention of these hosts, with or without a scheme (//arxiv.org/..., bare github.com/...), must sit
+# inside an https:// URL that the rules below check. This is an allow-list, so a new link form fails loudly.
+MENTION = re.compile(r"(?i)arxiv\.org|github\.com|githubusercontent\.com")
+GH_KIND = re.compile(r"https://github\.com/[^/]+/[^/]+/([^/#?]+)")
+GH_RELEASE = re.compile(r"https://github\.com/[^/]+/[^/]+/releases/(?:tag|download)/([^/#?]+)")
+GH_FREE = {"issues", "pull", "pulls", "discussions"}  # links to a thread, not to code: no pin needed
 ARXIV_ANY = re.compile(r"https?://(?:www\.)?arxiv\.org/(abs|pdf|html)/([0-9]{4}\.[0-9]{4,5})(v[0-9]+)?(?:\.pdf)?/?$")
 GH_PIN = re.compile(r"https://github\.com/[^/]+/[^/]+/(blob|tree)/([^/]+)(/.*)?$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -105,6 +113,12 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
     n = 0
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         texts = {m.end(): m.group(1) for m in INLINE.finditer(line)}  # url start -> link text
+        spans = [(u.start(), u.end()) for u in URL.finditer(line) if u.group(0).startswith("https://")]
+        for mm in MENTION.finditer(line):
+            if not any(a <= mm.start() < b for a, b in spans):
+                n += 1
+                errors.append(f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}: "
+                              f"{mm.group(0)} mentioned outside an https:// URL: {line.strip()[:120]}")
         for u in URL.finditer(line):
             url, text = u.group(0).rstrip(".,;:!?*_"), texts.get(u.start())
             where = f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}"
@@ -127,15 +141,25 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
                     errors.append(f"{where}: arXiv {aid}{ver} does not exist")
                 elif norm(title) != norm(text):
                     errors.append(f"{where}: title mismatch for {aid}{ver}\n    link text: {text}\n    arXiv:     {norm(title)}")
-            elif h == "github.com" or h.endswith(".github.com"):
+            elif h == "github.com" or h.endswith(".github.com") or h == "githubusercontent.com" or h.endswith(".githubusercontent.com"):
                 if not url.startswith("https://github.com/"):
                     n += 1
                     errors.append(f"{where}: GitHub link must start with https://github.com/: {url}")
                     continue
-                g = GH_PIN.match(url)
-                if not g:
-                    continue  # repo/org/issue/PR links are fine unpinned
                 n += 1
+                g = GH_PIN.match(url)
+                kind = GH_KIND.match(url)
+                if h != "github.com":
+                    errors.append(f"{where}: GitHub link must be on github.com: {url}")
+                    continue
+                if not g:
+                    rel = GH_RELEASE.match(url)
+                    if kind is None or kind.group(1) in GH_FREE:
+                        continue  # an org, a repo, an issue or a pull request
+                    if rel and TAG.match(rel.group(1)) and any(c.isdigit() for c in rel.group(1)):
+                        continue  # a release asset under a version tag
+                    errors.append(f"{where}: GitHub link kind not allowed (use blob/tree with a commit or tag): {url}")
+                    continue
                 ref = g.group(2)
                 if not (SHA.match(ref) or (TAG.match(ref) and any(c.isdigit() for c in ref))):
                     errors.append(f"{where}: GitHub link not pinned to a commit or version tag ({ref}): {url}")
