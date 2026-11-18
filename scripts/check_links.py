@@ -10,6 +10,7 @@ Rules (each violation is printed and makes the exit status 1):
             and blob/tree links (raw, blame, commits/<branch> and others fail)
           - a blob/tree link must be pinned: a 40-hex commit or a tag that looks like a version (v1.2.3, 1.2)
             never a branch name such as main/master
+          - online: a tag must be a tag in the repository, not a branch (git ls-remote), e.g. CPython's 3.12
           - the pinned URL must answer HTTP 200
 Run with --offline to apply only the format rules (no network).
 
@@ -21,6 +22,7 @@ import datetime
 import email.utils
 import html
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -91,6 +93,25 @@ def arxiv_title(aid: str, version: str) -> str | None:
         if eid.rstrip("/").endswith(f"{aid}{version}"):
             return entry.findtext(f"{ATOM}title")
     return None
+
+
+_REF_KIND: dict[tuple[str, str], str] = {}
+
+
+def ref_kind(repo: str, ref: str) -> str:
+    """'tag', 'branch', 'both' or 'none' for a name in https://github.com/<repo>, from git ls-remote.
+
+    A version-looking name can be a moving branch (CPython's 3.12), so the format rule alone cannot
+    tell a pin from a branch; this asks the repository.
+    """
+    key = (repo, ref)
+    if key not in _REF_KIND:
+        out = subprocess.run(["git", "ls-remote", "--tags", "--heads", f"https://github.com/{repo}", ref],
+                             capture_output=True, text=True, timeout=60, check=True).stdout.split()
+        tag = f"refs/tags/{ref}" in out
+        branch = f"refs/heads/{ref}" in out
+        _REF_KIND[key] = "both" if tag and branch else "tag" if tag else "branch" if branch else "none"
+    return _REF_KIND[key]
 
 
 def http_ok(url: str) -> bool:
@@ -164,12 +185,19 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
                     if kind is None or kind.group(1) in GH_FREE:
                         continue  # an org, a repo, an issue or a pull request
                     if rel and TAG.match(rel.group(1)) and any(c.isdigit() for c in rel.group(1)):
+                        repo = "/".join(urllib.parse.urlsplit(url).path.split("/")[1:3])
+                        if not offline and (k := ref_kind(repo, rel.group(1))) != "tag":
+                            errors.append(f"{where}: release {rel.group(1)} in {repo} is not a tag ({k}): {url}")
                         continue  # a release asset under a version tag
                     errors.append(f"{where}: GitHub link kind not allowed (use blob/tree with a commit or tag): {url}")
                     continue
                 ref = g.group(2)
                 if not (SHA.match(ref) or (TAG.match(ref) and any(c.isdigit() for c in ref))):
                     errors.append(f"{where}: GitHub link not pinned to a commit or version tag ({ref}): {url}")
+                    continue
+                repo = "/".join(urllib.parse.urlsplit(url).path.split("/")[1:3])
+                if not offline and not SHA.match(ref) and (kind := ref_kind(repo, ref)) != "tag":
+                    errors.append(f"{where}: {ref} in {repo} is not a tag (git ls-remote says {kind}): {url}")
                     continue
                 if not offline and not http_ok(url.split("#")[0]):
                     errors.append(f"{where}: GitHub permalink does not answer 200: {url}")
