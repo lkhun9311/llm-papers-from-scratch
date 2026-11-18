@@ -1,0 +1,134 @@
+{
+  "check": "02 self-test: every planted bug must be reported as a mismatch",
+  "mutations": [
+    {
+      "mutation": "window_includes_w_back",
+      "what": "causal window also lets query i see key i - w (w + 1 tokens)",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "window output seed=0 w=2 B=1 T=3 sched=[3] chunk=0: max abs diff 4.181e-03 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "window_evicts_early",
+      "what": "rolling KV keeps w - 2 past tokens instead of w - 1",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "window_state retained keys seed=0 w=2 B=1 T=1 sched=[1] chunk=0: shape (1, 2, 0, 4) vs reference (1, 2, 1, 4)",
+      "error": null
+    },
+    {
+      "mutation": "longformer_one_sided",
+      "what": "symmetric local mask made causal (only past neighbours)",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "longformer seed=0 r=2 B=1 L=8: max abs diff 1.173e+00 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "conv_taps_reversed",
+      "what": "convolution applies its taps in reverse time order",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba output seed=0 B=1 T=1 sched=[1] chunk=0: max abs diff 3.274e-01 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "conv_keeps_k",
+      "what": "convolution history keeps K columns instead of K - 1",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba_state conv history seed=0 B=1 T=1 sched=[1] chunk=0: shape (1, 32, 4) vs reference (1, 32, 3)",
+      "error": null
+    },
+    {
+      "mutation": "mamba_dt_no_bias",
+      "what": "Mamba dt ignores the dt_proj bias",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba output seed=0 B=1 T=1 sched=[1] chunk=0: max abs diff 9.911e-02 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "mamba_no_d_skip",
+      "what": "Mamba drops the D skip connection",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba output seed=0 B=1 T=1 sched=[1] chunk=0: max abs diff 4.386e-01 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "mamba2_no_dt_clamp",
+      "what": "Mamba-2 dt ignores the dt limit",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "ssd_core output seed=0 G=1 cs=4 T=1 limit=(0.303,0.794): max abs diff 6.112e-01 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "norm_before_gate",
+      "what": "Mamba-2 output norm applied before the gate instead of after",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba2 output seed=0 G=1 cs=4 B=1 T=1 sched=[1] chunk=0 mode=None: max abs diff 2.217e+00 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "norm_groups_ignored",
+      "what": "grouped gated norm always normalises the whole width",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "vllm_norm seed=0 n_groups=2: max abs diff 1.285e+00 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "groups_tiled",
+      "what": "B/C groups assigned to heads round-robin instead of in contiguous blocks",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba2 output seed=0 G=2 cs=4 B=1 T=1 sched=[1] chunk=0 mode=None: max abs diff 1.204e-03 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "ssd_drops_carry_in",
+      "what": "a chunk ignores the state carried in from earlier chunks in its outputs",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba2 output seed=0 G=1 cs=4 B=1 T=3 sched=[2, 1] chunk=1 mode=4: max abs diff 8.148e-03 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "ssd_state_no_decay",
+      "what": "the carried-in state is not decayed across a chunk",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "mamba2 ssm state seed=0 G=1 cs=4 B=1 T=3 sched=[2, 1] chunk=1 mode=4: max abs diff 1.467e-03 exceeds atol=2e-06 rtol=2e-05",
+      "error": null
+    },
+    {
+      "mutation": "snapshot_shallow",
+      "what": "Mamba-2 snapshot shares tensors with the live state",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint snapshot untouched ssm mamba2 seed=0 B=1 t=1 suffix=A sched=[2, 3] cs=None: not identical (96 elements differ)",
+      "error": null
+    },
+    {
+      "mutation": "snapshot_drops_conv",
+      "what": "Mamba-2 snapshot resets the convolution history",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint resumed output mamba2 seed=0 B=1 t=1 suffix=B sched=[1, 3, 1, 2] cs=None: max abs diff 1.488e+00 exceeds atol=1e-10 rtol=1e-09",
+      "error": null
+    },
+    {
+      "mutation": "window_snapshot_resets_position",
+      "what": "WindowKV snapshot forgets how many tokens were consumed",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint snapshot consumed window seed=0 w=2 t=1: 0 != 1",
+      "error": null
+    }
+  ],
+  "passed": true
+}

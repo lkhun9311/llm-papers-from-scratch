@@ -1,0 +1,122 @@
+{
+  "check": "02-hybrid-state vs transformers (Mistral sliding window, Longformer, Mamba, Mamba-2) and vLLM (Mamba-2 gated norm)",
+  "vllm": [
+    "0.34.0",
+    "g62d4bc3c7"
+  ],
+  "transformers": "5.22.2",
+  "torch": "2.14.0+cpu",
+  "python": "3.12.15",
+  "mutation": null,
+  "tolerances": {
+    "reference": {
+      "atol": 2e-06,
+      "rtol": 2e-05
+    },
+    "impl_identity": {
+      "atol": 1e-10,
+      "rtol": 1e-09
+    }
+  },
+  "cases": {
+    "window": 162,
+    "window_checkpoint": 36,
+    "longformer": 72,
+    "mamba": 54,
+    "mamba_checkpoint": 24,
+    "mamba2": 216,
+    "mamba2_checkpoint": 192,
+    "ssd_core": 108,
+    "vllm_norm": 9
+  },
+  "expected_cases": {
+    "window": 162,
+    "window_checkpoint": 36,
+    "longformer": 72,
+    "mamba": 54,
+    "mamba_checkpoint": 24,
+    "mamba2": 216,
+    "mamba2_checkpoint": 192,
+    "ssd_core": 108,
+    "vllm_norm": 9
+  },
+  "comparisons": {
+    "compare_checkpoint": 1908,
+    "compare_longformer": 72,
+    "compare_mamba": 684,
+    "compare_mamba2": 8504,
+    "compare_mamba2_state": 4252,
+    "compare_mamba_state": 342,
+    "compare_partition": 1440,
+    "compare_sizes": 12404,
+    "compare_ssd_core": 216,
+    "compare_ssd_identity": 216,
+    "compare_vllm_norm": 9,
+    "compare_window": 1608,
+    "compare_window_identity": 450,
+    "compare_window_state": 4824
+  },
+  "max_error_over_tolerance": {
+    "checkpoint": 1.6e-05,
+    "longformer": 0.016,
+    "mamba": 0.113,
+    "mamba2": 0.146,
+    "mamba2_state": 1e-05,
+    "mamba_state": 2.66e-06,
+    "partition": 2.86e-05,
+    "ssd_core": 0.227,
+    "ssd_identity": 1.18e-05,
+    "vllm_norm": 0.00732,
+    "window": 0.000655,
+    "window_identity": 2.23e-07,
+    "window_state": 0.0
+  },
+  "coverage": {
+    "window_wraps": 729,
+    "ssd_multi_chunk_calls": 755,
+    "ssd_short_last_chunk": 4857,
+    "ssd_nonzero_carry_in": 3705,
+    "dt_clamped_low": 2088,
+    "dt_clamped_high": 2088,
+    "two_group_cases": 108,
+    "resumed_suffixes": 468,
+    "window_reference_continuations": 265,
+    "mamba2_reference_continuations": 341,
+    "impl_continuations": 441
+  },
+  "min_coverage": {
+    "window_wraps": 50,
+    "ssd_multi_chunk_calls": 50,
+    "ssd_short_last_chunk": 50,
+    "ssd_nonzero_carry_in": 50,
+    "dt_clamped_low": 20,
+    "dt_clamped_high": 20,
+    "two_group_cases": 20,
+    "resumed_suffixes": 50,
+    "window_reference_continuations": 50,
+    "mamba2_reference_continuations": 50,
+    "impl_continuations": 50
+  },
+  "coverage_short": [],
+  "cases_missing": {},
+  "diagnostic_reference_step_dt_limit": {
+    "(0.0, inf)": {
+      "reference_one_call_vs_token_steps": 3.867230899956553e-07,
+      "impl_one_call_vs_token_steps": 1.7763568394002505e-15
+    },
+    "(0.05, 0.2)": {
+      "reference_one_call_vs_token_steps": 0.16994561114095433,
+      "impl_one_call_vs_token_steps": 2.6645352591003757e-15
+    }
+  },
+  "diagnostic_transformers_vs_vllm_norm_max_abs_diff": {
+    "1": 2.36e-07,
+    "2": 2.59,
+    "4": 2.64
+  },
+  "first_mismatch": null,
+  "error": null,
+  "passed": true,
+  "seconds": 4.6,
+  "peak_rss_mib": 583
+}
