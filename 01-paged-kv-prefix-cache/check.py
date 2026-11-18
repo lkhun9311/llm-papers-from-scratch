@@ -5,7 +5,8 @@ operation the two sides must agree on: admission success, prefix-hit length and 
 live block table, every request's token list and computed-token count (running and waiting), every
 block's reference count, the full free-queue order, and the cache as (token prefix -> holder block ids
 in hit-priority order). State is compared right after each allocation too, before the driver does any
-scheduler bookkeeping, and a refused allocation must leave each side exactly as it was.
+scheduler bookkeeping. A refused allocation, and any lookup, must leave each side exactly as it was, and
+a successful allocation must return the same new block ids on both sides.
 
 Cache entries are labelled with token prefixes by the checker, from each request's own hash chain
 (impl: block_digest over the tokens; vLLM: Request.block_hashes), never from what the cache recorded
@@ -137,11 +138,15 @@ class Labels:
             raise Mismatch(f"cached digest {e.args[0]!r} matches no request prefix")
 
 
-def snapshot(mine: PagedKVCache, ref: VllmKVCache, seqs: list[tuple[Seq, object]]):
-    """Full raw state of each side, for 'nothing changed' checks."""
+def snapshot(mine: PagedKVCache, ref: VllmKVCache, seqs: list[tuple[Seq, object]], lazy_ok: bool = False):
+    """Full raw state of each side, for 'nothing changed' checks. With lazy_ok, a sequence's
+    incrementally built block identities are left out (a lookup may legitimately extend them)."""
+    seq_state = [dataclasses.asdict(s) for s, _ in seqs]
+    if lazy_ok:
+        for d in seq_state:
+            d.pop("idents")
     return (
-        copy.deepcopy((mine.ref_cnt, list(mine.free), mine.cache_holders(), mine.identity,
-                       [dataclasses.asdict(s) for s, _ in seqs])),
+        copy.deepcopy((mine.ref_cnt, list(mine.free), mine.cache_holders(), mine.identity, seq_state)),
         copy.deepcopy((ref.ref_cnt(), ref.free_order(), ref.cache_holders(), ref.raw_block_hashes(),
                        [(ref.block_table(r.request_id), r.num_computed_tokens, list(r.all_token_ids),
                          [bytes(h) for h in r.block_hashes]) for _, r in seqs])),
@@ -169,6 +174,8 @@ def run_trace(seed: int, block_size: int, num_blocks: int, num_ops: int) -> dict
         got = mine.allocate(s, n_new, hit)
         got_ref = ref.allocate(req, n_new, blocks, ref_hit_tokens)
         compare(f"{step} success", got is not None, got_ref is not None)
+        if got is not None:
+            compare(f"{step} returned block ids", got, list(got_ref.get_block_ids()[0]))
         if got is None:  # a refusal must change nothing, on either side
             after = snapshot(mine, ref, seqs)
             compare(f"{step} impl state after refusal", after[0], before[0])
@@ -218,8 +225,13 @@ def run_trace(seed: int, block_size: int, num_blocks: int, num_ops: int) -> dict
                 req = ref.new_request(f"r{next_id}", tokens)
                 next_id += 1
             counts["admit_attempts"] += 1
+            seqs = [x for x in all_seqs() if x[0] is not s] + [(s, req)]
+            before = snapshot(mine, ref, seqs, lazy_ok=True)
             hit = mine.lookup(s)
             blocks, ref_hit_tokens = ref.lookup(req)
+            after = snapshot(mine, ref, seqs, lazy_ok=True)  # lookup must not change the cache
+            compare(f"{step} impl state after lookup", after[0], before[0])
+            compare(f"{step} vllm state after lookup", after[1], before[1])
             compare(f"{step} admit {s.seq_id} hit tokens", len(hit) * block_size, ref_hit_tokens)
             compare(f"{step} admit {s.seq_id} hit blocks", hit, list(blocks.get_block_ids()[0]))
             n_new = len(s.tokens) - len(hit) * block_size
@@ -298,6 +310,8 @@ MUTATIONS = {
     "success_side_effect": "a successful allocation also bumps the computed-token count",
     "register_wrong_identity": "register full blocks with their identities in reverse order",
     "concat_serialization": "serialize block tokens without delimiters, so [1, 2345] == [1234, 5]",
+    "lookup_evicts": "lookup drops the identity of the free block at the head of the queue",
+    "wrong_return_ids": "allocate returns the null block id instead of the blocks it allocated",
 }
 
 
@@ -409,6 +423,23 @@ def apply_mutation(name: str) -> None:
 
         impl.block_digest = lambda parent, toks: hashlib.blake2b(
             parent + "".join(map(str, toks)).encode(), digest_size=16).digest()
+    elif name == "lookup_evicts":
+        orig_lookup = K.lookup
+
+        def lookup(self, seq):
+            if self.free:
+                self._uncache(next(iter(self.free)))
+            return orig_lookup(self, seq)
+
+        K.lookup = lookup
+    elif name == "wrong_return_ids":
+        orig_alloc = K.allocate
+
+        def allocate(self, seq, num_new_tokens, hit):
+            out = orig_alloc(self, seq, num_new_tokens, hit)
+            return out if not out else [0] * len(out)
+
+        K.allocate = allocate
     else:
         sys.exit(f"unknown mutation {name}; choose from {sorted(MUTATIONS)}")
 

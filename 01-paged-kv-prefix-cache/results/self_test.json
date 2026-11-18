@@ -88,6 +88,22 @@
       "caught": true,
       "first_mismatch": "directed 'token boundary' hit tokens: impl=4 vllm=0",
       "error": null
+    },
+    {
+      "mutation": "lookup_evicts",
+      "what": "lookup drops the identity of the free block at the head of the queue",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "seed=0 B=4 N=12 op#20 impl state after lookup: impl=([0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1], [1, 4, 5, 8, 3, 6, 10, 9, 7], {b'HYCF\\x88\\x9f\\xe1e\\xcbo\\x8cg\\xd4\\xe66\\xf3': [4], b'\\x8d\\xeev\\xbc\\xbd\\xd4#\\x0b\\x17\\xd6\\x10C\\xcf\\xd4\\xa5A': [5], b'F\\xc42L/\\xbcOp\\xd3DB\\xfdl\\xc9\\xef\\x1a': [6], b'|\\x02\\x91\\xeec\\x06Q\\xb7\\x11\\xca\\x1e>\\xf5~\\x02b': [3], b'_\\x19:R2\\x1a\\xc9\\x87\\xe4\\xd7\\x1c\\xc4-\\xb0\\xb8\\x91': [8], b'V\\xa3\\xb9(U.\\x11\\xbf\\x9d\\xac\\x1b\\x1b}v\\xc6\\xee': [7], b'\\xb2\\x00\\xea8rn\\xdb12&z4\\xcb\\x9cV ': [9], b'cA\\x15\\xb1\\xd0\\xe2p}\\xa70T\\xb7c?\\xd5v': [10], b'\\xa0\\xc5\\xf0\\xa7\\x9a\\x95n(U\\xe1\\xc6o\\xe0\\x86),': [11]}, [None, None, None, b'|\\x02\\x91\\xeec\\x06Q\\xb7\\x11\\xca\\x1e>\\xf5~\\x02b', b'HYCF\\x88\\x9f\\xe1e\\xcbo\\x8cg\\xd4\\xe66\\xf3', b'\\x8d\\xeev\\xbc\\xbd\\xd4#\\x0b\\x17\\xd6\\x10C\\xcf\\xd4\\xa5A', b'F\\xc42L/\\xbcOp\\xd3DB\\xfdl\\xc9\\xef\\x1a', b'V\\xa3\\xb9(U.\\x11\\xbf\\x9d\\xac\\x1b\\x1b}v\\xc6\\xee', b'_\\x19:R2\\x1a\\xc9\\x87\\xe4\\xd7\\x1c\\xc4-\\xb0\\xb8\\x91', b'\\xb2\\x00\\xea8rn\\xdb12&z4\\xcb\\x9cV ', b'cA\\x15\\xb1\\xd0\\xe2p}\\xa70T\\xb7c?\\xd5v', b'\\xa0\\xc5\\xf0\\xa7\\x9a\\x95n(U\\xe1\\xc6o\\xe0\\x86),'], [{'seq_id': 'r6', 'tokens': [6, 0, 0, 1, 0, 7, 2, 1], 'num_computed': 7, 'block_table': [11, 2], 'num_cached_blocks': 1}, {'seq_id': 'r7', 'tokens': [1, 87559, 7, 6, 6], 'num_computed': 0, 'block_table': [], 'num_cached_blocks': 0}]) vllm=([0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1], [1, 4, 5, 8, 3, 6, 10, 9, 7], {b')xw\\x98\\xbf\\xc1<\\xe7W\\xe0\\x97\\xd5\\x13\\xc0Q&': [1], b'HYCF\\x88\\x9f\\xe1e\\xcbo\\x8cg\\xd4\\xe66\\xf3': [4], b'\\x8d\\xeev\\xbc\\xbd\\xd4#\\x0b\\x17\\xd6\\x10C\\xcf\\xd4\\xa5A': [5], b'F\\xc42L/\\xbcOp\\xd3DB\\xfdl\\xc9\\xef\\x1a': [6], b'|\\x02\\x91\\xeec\\x06Q\\xb7\\x11\\xca\\x1e>\\xf5~\\x02b': [3], b'_\\x19:R2\\x1a\\xc9\\x87\\xe4\\xd7\\x1c\\xc4-\\xb0\\xb8\\x91': [8], b'V\\xa3\\xb9(U.\\x11\\xbf\\x9d\\xac\\x1b\\x1b}v\\xc6\\xee': [7], b'\\xb2\\x00\\xea8rn\\xdb12&z4\\xcb\\x9cV ': [9], b'cA\\x15\\xb1\\xd0\\xe2p}\\xa70T\\xb7c?\\xd5v': [10], b'\\xa0\\xc5\\xf0\\xa7\\x9a\\x95n(U\\xe1\\xc6o\\xe0\\x86),': [11]}, [None, b')xw\\x98\\xbf\\xc1<\\xe7W\\xe0\\x97\\xd5\\x13\\xc0Q&', None, b'|\\x02\\x91\\xeec\\x06Q\\xb7\\x11\\xca\\x1e>\\xf5~\\x02b', b'HYCF\\x88\\x9f\\xe1e\\xcbo\\x8cg\\xd4\\xe66\\xf3', b'\\x8d\\xeev\\xbc\\xbd\\xd4#\\x0b\\x17\\xd6\\x10C\\xcf\\xd4\\xa5A', b'F\\xc42L/\\xbcOp\\xd3DB\\xfdl\\xc9\\xef\\x1a', b'V\\xa3\\xb9(U.\\x11\\xbf\\x9d\\xac\\x1b\\x1b}v\\xc6\\xee', b'_\\x19:R2\\x1a\\xc9\\x87\\xe4\\xd7\\x1c\\xc4-\\xb0\\xb8\\x91', b'\\xb2\\x00\\xea8rn\\xdb12&z4\\xcb\\x9cV ', b'cA\\x15\\xb1\\xd0\\xe2p}\\xa70T\\xb7c?\\xd5v', b'\\xa0\\xc5\\xf0\\xa7\\x9a\\x95n(U\\xe1\\xc6o\\xe0\\x86),'], [{'seq_id': 'r6', 'tokens': [6, 0, 0, 1, 0, 7, 2, 1], 'num_computed': 7, 'block_table': [11, 2], 'num_cached_blocks': 1}, {'seq_id': 'r7', 'tokens': [1, 87559, 7, 6, 6], 'num_computed': 0, 'block_table': [], 'num_cached_blocks': 0}])",
+      "error": null
+    },
+    {
+      "mutation": "wrong_return_ids",
+      "what": "allocate returns the null block id instead of the blocks it allocated",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "seed=0 B=4 N=12 op#0 admit r0 returned block ids: impl=[0, 0, 0] vllm=[1, 2, 3]",
+      "error": null
     }
   ],
   "passed": true
