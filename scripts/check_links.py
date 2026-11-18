@@ -188,6 +188,8 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
                         repo = "/".join(urllib.parse.urlsplit(url).path.split("/")[1:3])
                         if not offline and (k := ref_kind(repo, rel.group(1))) != "tag":
                             errors.append(f"{where}: release {rel.group(1)} in {repo} is not a tag ({k}): {url}")
+                        elif not offline and not http_ok(url.split("#")[0]):
+                            errors.append(f"{where}: release URL does not answer 200: {url}")
                         continue  # a release asset under a version tag
                     errors.append(f"{where}: GitHub link kind not allowed (use blob/tree with a commit or tag): {url}")
                     continue
