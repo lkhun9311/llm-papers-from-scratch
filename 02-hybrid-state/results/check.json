@@ -21,7 +21,8 @@
   "cases": {
     "ssd_directed": 1,
     "window": 162,
-    "window_checkpoint": 36,
+    "window_checkpoint": 48,
+    "window_one": 54,
     "longformer": 72,
     "mamba": 54,
     "mamba_checkpoint": 24,
@@ -33,7 +34,8 @@
   },
   "expected_cases": {
     "window": 162,
-    "window_checkpoint": 36,
+    "window_checkpoint": 48,
+    "window_one": 54,
     "longformer": 72,
     "mamba": 54,
     "mamba_checkpoint": 24,
@@ -45,22 +47,22 @@
     "ssd_directed": 1
   },
   "comparisons": {
-    "compare_checkpoint": 3384,
+    "compare_checkpoint": 3576,
     "compare_longformer": 72,
     "compare_mamba": 684,
-    "compare_mamba2": 8504,
-    "compare_mamba2_state": 8504,
+    "compare_mamba2": 8484,
+    "compare_mamba2_state": 8484,
     "compare_mamba_state": 684,
     "compare_mixer_variant": 1368,
     "compare_partition": 1920,
-    "compare_sizes": 24808,
+    "compare_sizes": 25834,
     "compare_ssd_core": 216,
     "compare_ssd_directed": 6,
     "compare_ssd_identity": 216,
     "compare_vllm_norm": 9,
-    "compare_window": 1608,
+    "compare_window": 1758,
     "compare_window_identity": 450,
-    "compare_window_state": 4824
+    "compare_window_state": 5890
   },
   "max_error_over_tolerance": {
     "checkpoint": 1.6e-05,
@@ -76,23 +78,24 @@
     "ssd_identity": 1.18e-05,
     "vllm_norm": 0.00732,
     "window": 0.000655,
-    "window_identity": 2.23e-07,
+    "window_identity": 2.29e-07,
     "window_state": 0.0
   },
   "coverage": {
-    "window_wraps": 729,
-    "ssd_multi_chunk_calls": 851,
-    "ssd_short_last_chunk": 5841,
-    "ssd_nonzero_carry_in": 4497,
+    "window_wraps": 731,
+    "ssd_multi_chunk_calls": 849,
+    "ssd_short_last_chunk": 5810,
+    "ssd_nonzero_carry_in": 4467,
     "dt_clamped_low": 2088,
     "dt_clamped_high": 2088,
     "two_group_cases": 108,
-    "resumed_suffixes": 252,
+    "resumed_suffixes": 264,
     "mixer_dt_clamped_low": 372,
     "mixer_dt_clamped_high": 372,
-    "window_reference_continuations": 265,
-    "mamba2_reference_continuations": 341,
-    "impl_continuations": 441
+    "window_reference_continuations": 259,
+    "mamba2_reference_continuations": 351,
+    "impl_continuations": 435,
+    "window_one": 533
   },
   "min_coverage": {
     "window_wraps": 50,
@@ -107,7 +110,8 @@
     "mixer_dt_clamped_high": 20,
     "window_reference_continuations": 50,
     "mamba2_reference_continuations": 50,
-    "impl_continuations": 50
+    "impl_continuations": 50,
+    "window_one": 20
   },
   "coverage_short": [],
   "cases_missing": {},
@@ -121,6 +125,11 @@
       "impl_one_call_vs_token_steps": 2.6645352591003757e-15
     }
   },
+  "diagnostic_reference_window_one": {
+    "decode_vs_self_only": 0.017,
+    "decode_vs_all_cached_tokens": 6.22e-10,
+    "chunks_2_3_1": "RuntimeError: The size of tensor a (5) must match the size of tensor b (3) at non-singleton dimension 3"
+  },
   "diagnostic_transformers_vs_vllm_norm_max_abs_diff": {
     "1": 2.36e-07,
     "2": 2.59,
@@ -129,6 +138,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 6.1,
-  "peak_rss_mib": 579
+  "seconds": 5.8,
+  "peak_rss_mib": 580
 }

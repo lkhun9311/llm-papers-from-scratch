@@ -65,6 +65,7 @@ SEEDS = (0, 1, 2)
 BATCHES = (1, 2)
 LENGTHS = (1, 3, 4, 5, 7, 8, 9, 17, 33)
 WINDOWS = (2, 4, 8)
+CHECKPOINT_WINDOWS = (1,) + WINDOWS  # w = 1 is impl-only: transformers mishandles it (window_one_reference)
 ONE_SIDED = (2, 3, 4)  # one_sided=1 (attention_window=2) fails inside the library's chunked form
 GROUPS = (1, 2)
 CHUNKS = (4, 8)
@@ -83,6 +84,7 @@ MIN_COVERAGE = {
     "window_reference_continuations": 50,  # a multi-token chunk after the first, run through Mistral
     "mamba2_reference_continuations": 50,  # the same, run through Mamba2Mixer
     "impl_continuations": 50,  # the same, impl-only partition checks
+    "window_one": 20,  # chunks checked with w = 1, where the cache must stay empty
 }
 
 
@@ -181,6 +183,28 @@ def check_window(oracle, seed: int, w: int, B: int, T: int, rng: random.Random) 
         dense = impl.sliding_attention(torch.cat(qs, 2), torch.cat(ks, 2), torch.cat(vs, 2), w, causal=True)
         close("window_identity", f"dense vs rolling seed={seed} w={w} T={T} sched={sched}", torch.cat(outs, 2),
               dense, TOL_ID)
+
+
+def check_window_one(seed: int, B: int, T: int, rng: random.Random) -> None:
+    """w = 1: each token attends to itself alone, so its output is its own value, and nothing is kept.
+
+    impl-only: transformers 5.22.2 keeps every token at w = 1 and its later chunks attend to all of them
+    or fail (diagnostic_reference_window_one), so it cannot be the reference here.
+    """
+    g = torch.Generator().manual_seed(seed * 89 + T)
+    q, k, v = torch.randn(B, 4, T, 4, dtype=DT, generator=g), *(torch.randn(B, 2, T, 4, dtype=DT, generator=g) for _ in range(2))
+    for sched in partitions(T, rng):
+        kv, pos, outs = impl.WindowKV(1), 0, []
+        for i, n in enumerate(sched):
+            outs.append(kv.forward(q[:, :, pos : pos + n], k[:, :, pos : pos + n], v[:, :, pos : pos + n]))
+            pos += n
+            tag = f"seed={seed} B={B} T={T} sched={sched} chunk={i}"
+            equal("window_state", f"retained tokens at w=1 {tag}", kv.keys.shape[2], 0)
+            equal("window_state", f"consumed at w=1 {tag}", kv.consumed, pos)
+            compact(tag, kv.tensors())
+            COUNT["window_one"] += 1
+        close("window", f"self-only output at w=1 seed={seed} B={B} T={T} sched={sched}", torch.cat(outs, 2),
+              v.repeat_interleave(2, 1), TOL_ID)
 
 
 def check_longformer(oracle, seed: int, r: int, B: int, blocks: int) -> None:
@@ -391,6 +415,31 @@ def check_vllm_norm(oracle, seed: int, G: int) -> float:
     return (impl.gated_rms_norm(y, z, w, 1e-5, 1) - ref).abs().max().item()
 
 
+def window_one_reference(oracle) -> dict:
+    """Diagnostic, not part of pass/fail: what transformers attends to at sliding_window = 1.
+
+    Token by token over 6 tokens, its output is compared with attention to the token alone (correct)
+    and with attention to every token so far (full attention). Returns the max abs diff to each.
+    """
+    ref = oracle.MistralRef(1, 0)
+    ids = torch.randint(0, 32, (1, 6), generator=torch.Generator().manual_seed(11))
+    self_only, every = 0.0, 0.0
+    for s in ref.run(ids, [1] * 6)[1:]:
+        q, k, v = ref.qkv(s["hidden"], s["cos"], s["sin"])
+        rep = q.shape[1] // v.shape[1]
+        own = ref.o_proj(v.repeat_interleave(rep, 1))
+        full = ref.o_proj(impl.attend(q, s["keys"], s["values"], torch.ones(1, s["keys"].shape[2], dtype=torch.bool)))
+        self_only = max(self_only, (own - s["out"]).abs().max().item())
+        every = max(every, (full - s["out"]).abs().max().item())
+    try:
+        ref.run(ids, [2, 3, 1])
+        continuation = "ran"
+    except Exception as e:  # recorded, not raised: this is the reference failing, not impl
+        continuation = f"{type(e).__name__}: {e}"
+    return {"decode_vs_self_only": float(f"{self_only:.3g}"), "decode_vs_all_cached_tokens": float(f"{every:.3g}"),
+            "chunks_2_3_1": continuation}
+
+
 def reference_step_dt_limit(oracle) -> dict:
     """Diagnostic, not part of pass/fail: does the library's single-token path apply a finite dt limit?
 
@@ -529,9 +578,14 @@ def run_all(oracle) -> dict:
                 for T in LENGTHS:
                     check_window(oracle, seed, w, B, T, rng)
                     cases["window"] += 1
-            for t in (1, w - 1, w, w + 3):
+        for w in CHECKPOINT_WINDOWS:
+            for t in (1, max(w - 1, 1), w, w + 3):
                 check_window_checkpoint(seed, w, t)
                 cases["window_checkpoint"] += 1
+        for B in BATCHES:
+            for T in LENGTHS:
+                check_window_one(seed, B, T, rng)
+                cases["window_one"] += 1
         for r in ONE_SIDED:
             for B in BATCHES:
                 for blocks in (1, 2, 3, 5):
@@ -576,7 +630,8 @@ NORM_GAP: dict[int, float] = {}  # n_groups -> max |transformers-style norm - vL
 
 EXPECTED_CASES = {
     "window": len(SEEDS) * len(WINDOWS) * len(BATCHES) * len(LENGTHS),
-    "window_checkpoint": len(SEEDS) * len(WINDOWS) * 4,
+    "window_checkpoint": len(SEEDS) * len(CHECKPOINT_WINDOWS) * 4,
+    "window_one": len(SEEDS) * len(BATCHES) * len(LENGTHS),
     "longformer": len(SEEDS) * len(ONE_SIDED) * len(BATCHES) * 4,
     "mamba": len(SEEDS) * len(BATCHES) * len(LENGTHS),
     "mamba_checkpoint": len(SEEDS) * len(BATCHES) * 4,
@@ -595,6 +650,7 @@ EXPECTED_CASES = {
 
 MUTATIONS = {
     "window_includes_w_back": "causal window also lets query i see key i - w (w + 1 tokens)",
+    "window_slice_minus_zero": "rolling KV kept with [-keep:], which keeps every token when keep = 0 (w = 1)",
     "window_evicts_early": "rolling KV keeps w - 2 past tokens instead of w - 1",
     "longformer_one_sided": "symmetric local mask made causal (only past neighbours)",
     "conv_taps_reversed": "convolution applies its taps in reverse time order",
@@ -632,6 +688,18 @@ def apply_mutation(name: str) -> None:
             return orig(q, k, w + 1, causal) if causal else orig(q, k, w, causal)
 
         impl.window_allowed = f
+    elif name == "window_slice_minus_zero":
+        orig = impl.WindowKV.forward
+
+        def f(self, q, k, v):
+            prev_k, prev_v = self.keys, self.values
+            out = orig(self, q, k, v)
+            if impl.window_retained(self.consumed, self.w) == 0:  # x[-0:] is all of x
+                self.keys = k.clone() if prev_k is None else torch.cat([prev_k, k], 2)
+                self.values = v.clone() if prev_v is None else torch.cat([prev_v, v], 2)
+            return out
+
+        impl.WindowKV.forward = f
     elif name == "window_evicts_early":
         impl.window_retained = lambda n, w: max(min(n, w - 2), 0)
     elif name == "longformer_one_sided":
@@ -825,9 +893,11 @@ def main() -> int:
     failure = error = None
     cases: dict = {}
     diagnostic = None
+    window_one = None
     try:
         cases = run_all(oracle)
         diagnostic = reference_step_dt_limit(oracle)
+        window_one = window_one_reference(oracle)
     except Mismatch as e:
         failure = str(e)
     except Exception as e:  # a crash is a failure too, but not a caught mismatch
@@ -857,6 +927,7 @@ def main() -> int:
         "coverage_short": short,
         "cases_missing": missing,
         "diagnostic_reference_step_dt_limit": diagnostic,
+        "diagnostic_reference_window_one": window_one,
         "diagnostic_transformers_vs_vllm_norm_max_abs_diff": {str(k): float(f"{v:.3g}") for k, v in NORM_GAP.items()},
         "first_mismatch": failure,
         "error": error,

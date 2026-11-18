@@ -10,6 +10,14 @@
       "error": null
     },
     {
+      "mutation": "window_slice_minus_zero",
+      "what": "rolling KV kept with [-keep:], which keeps every token when keep = 0 (w = 1)",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "window_state retained tokens at w=1 seed=0 B=1 T=1 sched=[1] chunk=0: 1 != 0",
+      "error": null
+    },
+    {
       "mutation": "window_evicts_early",
       "what": "rolling KV keeps w - 2 past tokens instead of w - 1",
       "exit": 1,
@@ -150,7 +158,7 @@
       "what": "WindowKV snapshot copies correctly, then resets the live window and token count",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "checkpoint live consumed unchanged by snapshot() window seed=0 w=2 t=1: 0 != 1",
+      "first_mismatch": "checkpoint live consumed unchanged by snapshot() window seed=0 w=1 t=1: 0 != 1",
       "error": null
     },
     {
@@ -166,7 +174,7 @@
       "what": "WindowKV snapshot forgets how many tokens were consumed",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "checkpoint snapshot consumed window seed=0 w=2 t=1: 0 != 1",
+      "first_mismatch": "checkpoint snapshot consumed window seed=0 w=1 t=1: 0 != 1",
       "error": null
     },
     {

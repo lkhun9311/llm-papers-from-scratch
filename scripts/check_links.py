@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 ARXIV_ANY = re.compile(r"https?://(?:www\.)?arxiv\.org/(abs|pdf|html)/([0-9]{4}\.[0-9]{4,5})(v[0-9]+)?(?:\.pdf)?/?$")
 GH_PIN = re.compile(r"https://github\.com/[^/]+/[^/]+/(blob|tree)/([^/]+)(/.*)?$")
-GH_ANY = re.compile(r"https?://(?:www\.)?github\.com/")
+GH_ANY = re.compile(r"https?://(?:www\.)?github\.com/", re.IGNORECASE)
 SHA = re.compile(r"^[0-9a-f]{40}$")
 TAG = re.compile(r"^v?[0-9]+(\.[0-9]+)*([.-]?[A-Za-z0-9]+)*$")
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -94,9 +94,9 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
         for text, url in LINK.findall(line):
             where = f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}"
             m = ARXIV_ANY.match(url)
-            if "arxiv.org" in url:
+            if "arxiv.org" in url.lower():
                 n += 1
-                if not m or m.group(1) != "abs" or not m.group(3):
+                if not m or not url.startswith("https://arxiv.org/abs/") or not m.group(3):
                     errors.append(f"{where}: arXiv link must be https://arxiv.org/abs/<id>v<N>: {url}")
                     continue
                 if offline:
