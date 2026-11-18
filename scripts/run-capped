@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# run-capped — run one command under a hard memory cap, with no swap, on a limited set of cores.
+#
+#   scripts/run-capped [--mem 8G] [--cpus 8] -- <command> [args...]
+#
+# Why: this PC is shared with other projects and has no GPU. On 2026-11-14 an uncapped experiment took 37 GiB
+# and brought the desktop session down. Every model run in this repo goes through this script.
+#
+# What it does (all fail closed, exit 2 on refusal):
+#   1. one run-capped at a time (flock), so two experiments cannot add up past the budget
+#   2. refuses to start unless MemAvailable >= mem + 4 GiB right now
+#   3. prints the resource state before the run (also to logs/run-capped.log)
+#   4. runs the command in a transient systemd scope with MemoryMax=mem, MemorySwapMax=0
+#      → over the cap the kernel OOM-kills the command, never the desktop
+#   5. pins it to cores 0..cpus-1 with taskset (AllowedCPUs= does nothing in a --user scope here: the cpuset
+#      controller is not delegated, measured 2026-11-15) and sets OMP/MKL threads to match
+#   6. reports the command's own exit status; 137 is called out as a likely OOM kill
+set -euo pipefail
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+LOG_DIR=$REPO/logs
+LOG=$LOG_DIR/run-capped.log
+MARGIN_GIB=4
+mkdir -p "$LOG_DIR"
+die() { echo "run-capped: $*" >&2; exit 2; }
+
+mem=8G; cpus=8
+while [ $# -gt 0 ]; do
+  case $1 in
+    --mem) [ $# -ge 2 ] || die "--mem needs a value"; mem=$2; shift 2 ;;
+    --cpus) [ $# -ge 2 ] || die "--cpus needs a value"; cpus=$2; shift 2 ;;
+    --) shift; break ;;
+    *) die "unknown option $1 (usage: run-capped [--mem 8G] [--cpus 8] -- cmd ...)" ;;
+  esac
+done
+[ $# -ge 1 ] || die "nothing to run"
+[[ $mem =~ ^([1-9][0-9]?)G$ ]] || die "--mem must be 1G..24G, got '$mem'"
+mem_gib=${BASH_REMATCH[1]}; [ "$mem_gib" -le 24 ] || die "--mem must be at most 24G"
+[[ $cpus =~ ^[1-9][0-9]?$ ]] && [ "$cpus" -le 16 ] || die "--cpus must be 1..16, got '$cpus'"
+
+exec 9>"$LOG_DIR/run-capped.lock"
+flock -n 9 || die "another run-capped is running (lock $LOG_DIR/run-capped.lock)"
+
+avail_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+need_kib=$(( (mem_gib + MARGIN_GIB) * 1024 * 1024 ))
+unit="papers-$(date +%Y%m%d-%H%M%S)-$$"
+{
+  echo "=== $(date -Is) unit=$unit mem=$mem cpus=$cpus cmd=$*"
+  echo "MemAvailable: $((avail_kib / 1024 / 1024)) GiB (need $((mem_gib + MARGIN_GIB)) GiB = cap + ${MARGIN_GIB} GiB margin)"
+  free -h | sed 's/^/  /'
+  echo "load: $(cut -d' ' -f1-3 /proc/loadavg)"
+} | tee -a "$LOG"
+[ "$avail_kib" -ge "$need_kib" ] || die "not enough free memory to start safely; nothing was run"
+
+set +e
+systemd-run --user --scope --quiet --unit="$unit" \
+  -p MemoryMax="$mem" -p MemorySwapMax=0 \
+  --setenv=OMP_NUM_THREADS="$cpus" --setenv=MKL_NUM_THREADS="$cpus" \
+  -- taskset -c "0-$((cpus - 1))" "$@"
+status=$?
+set -e
+
+if [ $status -eq 137 ] || [ $status -eq 9 ]; then
+  echo "run-capped: exit $status — killed, most likely by the ${mem} memory cap (OOM)" | tee -a "$LOG" >&2
+else
+  echo "run-capped: exit $status" | tee -a "$LOG"
+fi
+exit $status
