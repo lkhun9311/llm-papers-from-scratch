@@ -427,6 +427,8 @@ def check_isolation(live, snap, pristine, tag: str) -> None:
     Forward passes mostly replace state tensors, so a snapshot that shares a tensor can survive a
     continuation unnoticed and still be corrupted later by any in-place update. This writes directly.
     """
+    for k, v in live.tensors().items():  # taking the snapshot must not have changed the live state
+        identical("checkpoint", f"live state unchanged by snapshot() {k} {tag}", v, pristine[k])
     for v in live.tensors().values():
         v.add_(1.0)
     for k, v in snap.tensors().items():
@@ -604,6 +606,7 @@ MUTATIONS = {
     "snapshot_shares_conv": "Mamba-2 snapshot shares only the convolution history with the live state",
     "mamba_snapshot_shallow": "Mamba snapshot shares tensors with the live state",
     "window_snapshot_shallow": "WindowKV snapshot shares its keys and values with the live state",
+    "snapshot_clobbers_live": "Mamba-2 snapshot copies correctly, then zeroes the live state",
     "snapshot_drops_conv": "Mamba-2 snapshot resets the convolution history",
     "window_snapshot_resets_position": "WindowKV snapshot forgets how many tokens were consumed",
     "snapshot_negates": "Mamba snapshot stores the negated state (a second snapshot would undo it)",
@@ -701,6 +704,14 @@ def apply_mutation(name: str) -> None:
             return s
 
         impl.WindowKV.snapshot = f
+    elif name == "snapshot_clobbers_live":
+        def f(self):
+            s = impl.Mamba2State(self.conv.clone(), self.ssm.clone(), self.consumed)
+            self.conv.zero_()
+            self.ssm.zero_()
+            return s
+
+        impl.Mamba2State.snapshot = f
     elif name == "snapshot_drops_conv":
         impl.Mamba2State.snapshot = lambda self: impl.Mamba2State(torch.zeros_like(self.conv), self.ssm.clone(),
                                                                   self.consumed)

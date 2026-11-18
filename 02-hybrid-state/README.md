@@ -132,7 +132,7 @@ less state than an SSM.
 |---|---|
 | `impl.py` | `WindowKV`, `sliding_attention`, `causal_conv`, `mamba_forward`, `ssd_recurrent`, `ssd_chunk`/`ssd_chunked`, `mamba2_forward`, `gated_rms_norm`, `snapshot()` on every state, `state_bytes`/`expected_bytes`. Float64, torch only, no transformers. |
 | `oracle.py` | Tiny random one-layer Mistral, Longformer self-attention, Mamba and Mamba-2 mixers from transformers 5.22.2, run with the library's own caches; vLLM 0.34.0's gated-norm code. Copies weights into impl's plain classes. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 25 bugs and requires each to be reported. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 26 bugs and requires each to be reported. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 02-hybrid-state/check.py --out 02-hybrid-state/results/check.json
@@ -169,7 +169,7 @@ for the Mamba-2 gated norm. Random tiny models (hidden 16; Mamba `I` = 32, `N` =
 | ssd directed | A Δ of `1e16` next to a Δ of 1 in one chunk; the exact output is `exp(−1)`. One 1,024-token chunk vs the token-by-token form (the segment sums must stay `L²`, not `L³`) | 1 case |
 | vllm norm | `gated_rms_norm(groups=G)` vs vLLM `Mixer2RMSNormGated.forward_native` | `G` ∈ {1, 2, 4} |
 | partition | Any chunking = one call (outputs and final state) | all lengths |
-| checkpoint | Snapshot at `t` must equal a torch clone of the live state taken before `snapshot()` runs. Advance the live state with one suffix, check the snapshot did not move, add 1 in place to every live tensor and check again, then resume another suffix from the snapshot itself. Both must equal a fresh run over prefix + suffix, with exact token counts | `t` around window and chunk edges |
+| checkpoint | Snapshot at `t` must equal a torch clone of the live state taken before `snapshot()` runs. Advance the live state with one suffix, check that `snapshot()` left the live state as it was and that the snapshot did not move, add 1 in place to every live tensor and check again, then resume another suffix from the snapshot itself. Both must equal a fresh run over prefix + suffix, with exact token counts | `t` around window and chunk edges |
 | sizes | `state_bytes` = `expected_bytes`; reference cache tensor sizes; each state tensor's storage is exactly its payload (no view keeping a larger buffer alive) | every step |
 
 A pass requires all 910 cases and minimum counts of window wraps, multi-chunk calls, short last chunks,
@@ -181,9 +181,9 @@ impl-only partition checks.
 **Result** (`results/check.json`): passed. The run makes about 57,000 comparisons and finds no
 mismatch.
 
-**Planted bugs** (`results/self_test.json`): all 25 are reported as mismatches.
+**Planted bugs** (`results/self_test.json`): all 26 are reported as mismatches.
 
-| Mutation | Caught by |
+| Mutation | First reported by |
 |---|---|
 | window includes key `i − w` | window output |
 | rolling KV keeps `w − 2` | retained-KV shape |
@@ -196,12 +196,13 @@ mismatch.
 | norm before gate | mamba2 output |
 | norm groups ignored | mixer with vLLM's norm |
 | B/C groups assigned round-robin | mamba2 output with `G = 2` |
-| chunk ignores carried-in state in its outputs | mamba2 multi-chunk |
-| carried-in state not decayed across a chunk | mamba2 state |
-| shallow snapshot (Mamba-2) | checkpoint isolation |
+| chunk ignores carried-in state in its outputs | ssd directed (1,024-token chunk, nonzero initial state) |
+| carried-in state not decayed across a chunk | ssd directed (1,024-token chunk, final state) |
+| shallow snapshot (Mamba-2) | in-place write to the live state |
 | Mamba-2 snapshot shares only the convolution history | in-place write to the live state |
 | shallow snapshot (Mamba) | in-place write to the live state |
 | window snapshot shares its keys and values | in-place write to the live state |
+| snapshot zeroes the live state after copying it | live state unchanged by `snapshot()` |
 | snapshot drops the convolution history | snapshot equals the live state |
 | window snapshot forgets its token count | checkpoint token count |
 | snapshot stores the negated state | snapshot equals the live state |

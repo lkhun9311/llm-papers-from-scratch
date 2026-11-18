@@ -138,6 +138,14 @@
       "error": null
     },
     {
+      "mutation": "snapshot_clobbers_live",
+      "what": "Mamba-2 snapshot copies correctly, then zeroes the live state",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint live state unchanged by snapshot() conv mamba2 seed=0 B=1 t=1 cs=None: not identical (38 elements differ)",
+      "error": null
+    },
+    {
       "mutation": "snapshot_drops_conv",
       "what": "Mamba-2 snapshot resets the convolution history",
       "exit": 1,
