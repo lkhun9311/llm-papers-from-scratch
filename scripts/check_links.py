@@ -3,7 +3,8 @@
 
 Rules (each violation is printed and makes the exit status 1):
   Every URL in a file is checked, in any Markdown form; its parsed host (case and port ignored) picks the rules.
-  arXiv   - must be an inline [title](url) link to an abs page with a version: https://arxiv.org/abs/2104.09864v5
+  arXiv   - its DOI (10.48550/arXiv.<id>) is refused: it carries no version
+          - must be an inline [title](url) link to an abs page with a version: https://arxiv.org/abs/2104.09864v5
           - the version must exist, and the link text must equal the paper title from the arXiv API
             (case and whitespace ignored), so a wrong ID cannot hide behind a plausible title
   GitHub  - only github.com; allowed kinds: org, repo, issues, pull requests, releases under a version tag,
@@ -143,6 +144,10 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
                 n += 1
                 errors.append(f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}: "
                               f"{mm.group(0)} mentioned outside an https:// URL: {line.strip()[:120]}")
+        for d in re.finditer(r"(?i)10\.48550/arxiv\.\S+", line):  # arXiv's DOI: unversioned, no title check
+            n += 1
+            errors.append(f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}: "
+                          f"arXiv DOI found; cite https://arxiv.org/abs/<id>v<N> with the paper title: {d.group(0)}")
         for u in URL.finditer(line):
             url, text = u.group(0).rstrip(".,;:!?*_"), texts.get(u.start())
             where = f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}"
