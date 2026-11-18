@@ -2,7 +2,8 @@
 """Check reference links in every Markdown file of this repo.
 
 Rules (each violation is printed and makes the exit status 1):
-  arXiv   - must be an abs link with a version: https://arxiv.org/abs/2104.09864v5
+  Every URL in a file is checked, in any Markdown form; its parsed host (case and port ignored) picks the rules.
+  arXiv   - must be an inline [title](url) link to an abs page with a version: https://arxiv.org/abs/2104.09864v5
           - the version must exist, and the link text must equal the paper title from the arXiv API
             (case and whitespace ignored), so a wrong ID cannot hide behind a plausible title
   GitHub  - a blob/tree link must be pinned: a 40-hex commit or a tag that looks like a version (v1.2.3, 1.2)
@@ -26,7 +27,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")  # any target; the host decides which rules apply
+# Every URL in the file, whatever Markdown form carries it (inline, <autolink>, reference definition, bare):
+# the host decides which rules apply, so no link syntax can carry an arXiv or GitHub URL past the rules.
+URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>()\[\]\"'`]+")
+# Inline links [text](url), [text](<url>) and [text](url "title"): gives the text for the arXiv title rule.
+INLINE = re.compile(r"\[([^\]]+)\]\(\s*<?")
 ARXIV_ANY = re.compile(r"https?://(?:www\.)?arxiv\.org/(abs|pdf|html)/([0-9]{4}\.[0-9]{4,5})(v[0-9]+)?(?:\.pdf)?/?$")
 GH_PIN = re.compile(r"https://github\.com/[^/]+/[^/]+/(blob|tree)/([^/]+)(/.*)?$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -99,7 +104,9 @@ def host(url: str) -> str:
 def check_file(path: Path, offline: bool, errors: list[str]) -> int:
     n = 0
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        for text, url in LINK.findall(line):
+        texts = {m.end(): m.group(1) for m in INLINE.finditer(line)}  # url start -> link text
+        for u in URL.finditer(line):
+            url, text = u.group(0).rstrip(".,;:!?*_"), texts.get(u.start())
             where = f"{path.relative_to(REPO) if path.is_relative_to(REPO) else path}:{lineno}"
             m = ARXIV_ANY.match(url)
             h = host(url)
@@ -107,6 +114,9 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
                 n += 1
                 if not m or not url.startswith("https://arxiv.org/abs/") or not m.group(3):
                     errors.append(f"{where}: arXiv link must be https://arxiv.org/abs/<id>v<N>: {url}")
+                    continue
+                if text is None:
+                    errors.append(f"{where}: arXiv link must be an inline [paper title](url) link: {url}")
                     continue
                 if offline:
                     continue
