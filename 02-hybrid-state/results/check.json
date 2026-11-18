@@ -45,7 +45,7 @@
     "ssd_directed": 1
   },
   "comparisons": {
-    "compare_checkpoint": 3204,
+    "compare_checkpoint": 3384,
     "compare_longformer": 72,
     "compare_mamba": 684,
     "compare_mamba2": 8504,
@@ -129,6 +129,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 6.2,
-  "peak_rss_mib": 581
+  "seconds": 6.1,
+  "peak_rss_mib": 579
 }

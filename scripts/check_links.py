@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 ARXIV_ANY = re.compile(r"https?://(?:www\.)?arxiv\.org/(abs|pdf|html)/([0-9]{4}\.[0-9]{4,5})(v[0-9]+)?(?:\.pdf)?/?$")
 GH_PIN = re.compile(r"https://github\.com/[^/]+/[^/]+/(blob|tree)/([^/]+)(/.*)?$")
-GH_ANY = re.compile(r"https://github\.com/")
+GH_ANY = re.compile(r"https?://(?:www\.)?github\.com/")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 TAG = re.compile(r"^v?[0-9]+(\.[0-9]+)*([.-]?[A-Za-z0-9]+)*$")
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -109,6 +109,10 @@ def check_file(path: Path, offline: bool, errors: list[str]) -> int:
                 elif norm(title) != norm(text):
                     errors.append(f"{where}: title mismatch for {aid}{ver}\n    link text: {text}\n    arXiv:     {norm(title)}")
             elif GH_ANY.match(url):
+                if not url.startswith("https://github.com/"):
+                    n += 1
+                    errors.append(f"{where}: GitHub link must start with https://github.com/: {url}")
+                    continue
                 g = GH_PIN.match(url)
                 if not g:
                     continue  # repo/org/issue/PR links are fine unpinned

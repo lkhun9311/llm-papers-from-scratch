@@ -146,6 +146,14 @@
       "error": null
     },
     {
+      "mutation": "window_snapshot_clobbers_live",
+      "what": "WindowKV snapshot copies correctly, then resets the live window and token count",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "checkpoint live consumed unchanged by snapshot() window seed=0 w=2 t=1: 0 != 1",
+      "error": null
+    },
+    {
       "mutation": "snapshot_drops_conv",
       "what": "Mamba-2 snapshot resets the convolution history",
       "exit": 1,

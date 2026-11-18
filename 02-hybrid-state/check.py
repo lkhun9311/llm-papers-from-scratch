@@ -484,12 +484,17 @@ def check_window_checkpoint(seed: int, w: int, t: int) -> None:
     for name, val in snap.tensors().items():
         identical("checkpoint", f"snapshot equals live state {name} {tag}", val, pristine[name])
     equal("checkpoint", f"snapshot consumed {tag}", snap.consumed, t)
+    equal("checkpoint", f"snapshot window {tag}", snap.w, w)
+    equal("checkpoint", f"live consumed unchanged by snapshot() {tag}", live.consumed, t)
+    equal("checkpoint", f"live window unchanged by snapshot() {tag}", live.w, w)
     check_isolation(live, snap, pristine, tag)
-    live.forward(q[:, :, t:], k[:, :, t:], v[:, :, t:])
+    dense = impl.sliding_attention(q, k, v, w)
+    live_out = live.forward(q[:, :, t:], k[:, :, t:], v[:, :, t:])
+    close("checkpoint", f"live output after snapshot {tag}", live_out, dense[:, :, t:], TOL_ID)
+    equal("checkpoint", f"live consumed after snapshot {tag}", live.consumed, t + 6)
     for name, val in snap.tensors().items():
         identical("checkpoint", f"snapshot untouched {name} {tag}", val, pristine[name])
     outs = [snap.forward(q[:, :, i : i + 1], k[:, :, i : i + 1], v[:, :, i : i + 1]) for i in range(t, t + 6)]
-    dense = impl.sliding_attention(q, k, v, w)
     COUNT["resumed_suffixes"] += 1
     close("checkpoint", f"resumed output {tag}", torch.cat(outs, 2), dense[:, :, t:], TOL_ID)
     equal("checkpoint", f"resumed consumed {tag}", snap.consumed, t + 6)
@@ -607,6 +612,7 @@ MUTATIONS = {
     "mamba_snapshot_shallow": "Mamba snapshot shares tensors with the live state",
     "window_snapshot_shallow": "WindowKV snapshot shares its keys and values with the live state",
     "snapshot_clobbers_live": "Mamba-2 snapshot copies correctly, then zeroes the live state",
+    "window_snapshot_clobbers_live": "WindowKV snapshot copies correctly, then resets the live window and token count",
     "snapshot_drops_conv": "Mamba-2 snapshot resets the convolution history",
     "window_snapshot_resets_position": "WindowKV snapshot forgets how many tokens were consumed",
     "snapshot_negates": "Mamba snapshot stores the negated state (a second snapshot would undo it)",
@@ -712,6 +718,15 @@ def apply_mutation(name: str) -> None:
             return s
 
         impl.Mamba2State.snapshot = f
+    elif name == "window_snapshot_clobbers_live":
+        orig = impl.WindowKV.snapshot
+
+        def f(self):
+            s = orig(self)
+            self.w, self.consumed = 1, 0
+            return s
+
+        impl.WindowKV.snapshot = f
     elif name == "snapshot_drops_conv":
         impl.Mamba2State.snapshot = lambda self: impl.Mamba2State(torch.zeros_like(self.conv), self.ssm.clone(),
                                                                   self.consumed)

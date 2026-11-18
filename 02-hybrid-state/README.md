@@ -132,7 +132,7 @@ less state than an SSM.
 |---|---|
 | `impl.py` | `WindowKV`, `sliding_attention`, `causal_conv`, `mamba_forward`, `ssd_recurrent`, `ssd_chunk`/`ssd_chunked`, `mamba2_forward`, `gated_rms_norm`, `snapshot()` on every state, `state_bytes`/`expected_bytes`. Float64, torch only, no transformers. |
 | `oracle.py` | Tiny random one-layer Mistral, Longformer self-attention, Mamba and Mamba-2 mixers from transformers 5.22.2, run with the library's own caches; vLLM 0.34.0's gated-norm code. Copies weights into impl's plain classes. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 26 bugs and requires each to be reported. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 27 bugs and requires each to be reported. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 02-hybrid-state/check.py --out 02-hybrid-state/results/check.json
@@ -181,7 +181,7 @@ impl-only partition checks.
 **Result** (`results/check.json`): passed. The run makes about 57,000 comparisons and finds no
 mismatch.
 
-**Planted bugs** (`results/self_test.json`): all 26 are reported as mismatches.
+**Planted bugs** (`results/self_test.json`): all 27 are reported as mismatches.
 
 | Mutation | First reported by |
 |---|---|
@@ -203,6 +203,7 @@ mismatch.
 | shallow snapshot (Mamba) | in-place write to the live state |
 | window snapshot shares its keys and values | in-place write to the live state |
 | snapshot zeroes the live state after copying it | live state unchanged by `snapshot()` |
+| window snapshot resets the live window and token count | live token count unchanged by `snapshot()` |
 | snapshot drops the convolution history | snapshot equals the live state |
 | window snapshot forgets its token count | checkpoint token count |
 | snapshot stores the negated state | snapshot equals the live state |
