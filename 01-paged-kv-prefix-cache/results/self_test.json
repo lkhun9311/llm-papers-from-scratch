@@ -1,0 +1,46 @@
+{
+  "check": "01 self-test: every planted bug must be caught",
+  "mutations": [
+    {
+      "mutation": "free_head_first",
+      "what": "release blocks head-first instead of tail-first",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "seed=0 B=4 N=12 op#1 free order: impl=[3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2] vllm=[3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 1]",
+      "error": null
+    },
+    {
+      "mutation": "no_last_token_rule",
+      "what": "allow the whole prompt to hit (no recompute of the last token)",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "seed=7 B=4 N=12 op#6 admit r3 hit tokens: impl=4 vllm=0",
+      "error": null
+    },
+    {
+      "mutation": "newest_duplicate",
+      "what": "hit the newest duplicate block instead of the oldest",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "seed=7 B=4 N=12 op#10 admit r2 hit blocks: impl=[8, 7] vllm=[6, 7]",
+      "error": null
+    },
+    {
+      "mutation": "uncached_to_tail",
+      "what": "put identity-less freed blocks at the tail instead of the head",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "seed=0 B=4 N=12 op#1 free order: impl=[4, 5, 6, 7, 8, 9, 10, 11, 2, 1, 3] vllm=[3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 1]",
+      "error": null
+    },
+    {
+      "mutation": "free_hits_cost_nothing",
+      "what": "do not count hits on free blocks against free capacity at admission",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "seed=2 B=4 N=12 op#27 admit r1 success: impl=True vllm=False",
+      "error": null
+    }
+  ],
+  "passed": true
+}

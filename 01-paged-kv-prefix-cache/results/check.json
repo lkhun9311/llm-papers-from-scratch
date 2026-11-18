@@ -1,0 +1,60 @@
+{
+  "check": "01-paged-kv-prefix-cache differential vs vLLM KVCacheManager",
+  "vllm": "0.34.0",
+  "torch": "2.14.0+cpu",
+  "python": "3.12.15",
+  "configs": [
+    {
+      "block_size": 4,
+      "num_blocks": 12
+    },
+    {
+      "block_size": 4,
+      "num_blocks": 40
+    },
+    {
+      "block_size": 16,
+      "num_blocks": 20
+    }
+  ],
+  "traces_per_config": 300,
+  "ops_per_trace": 200,
+  "traces_run": 900,
+  "traces_expected": 900,
+  "mutation": null,
+  "op_totals": {
+    "admit": 51848,
+    "admit_fail": 14626,
+    "hit_tokens": 174808,
+    "decode": 68389,
+    "decode_fail": 1396,
+    "finish": 29750,
+    "preempt": 15387,
+    "evictions": 51725,
+    "duplicates": 497,
+    "capped_full_hits": 412
+  },
+  "compared_each_op": [
+    "admission success",
+    "hit tokens",
+    "hit block ids",
+    "block tables",
+    "ref counts",
+    "free-queue order",
+    "cache identity classes",
+    "impl invariants"
+  ],
+  "coverage": {
+    "hit_tokens": 174808,
+    "evictions": 51725,
+    "duplicates": 497,
+    "capped_full_hits": 412
+  },
+  "coverage_minimum": 20,
+  "coverage_short": [],
+  "first_mismatch": null,
+  "error": null,
+  "passed": true,
+  "seconds": 6.74,
+  "peak_rss_mib": 534.2
+}
