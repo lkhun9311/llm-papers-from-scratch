@@ -56,8 +56,6 @@ class PagedKVCache:
         # identity -> block ids holding it, oldest first. Duplicates are kept on purpose: merging
         # them would change a running request's block table, and block tables are append-only.
         self.cached: dict[bytes, list[int]] = {}
-        # identity -> the token prefix it stands for. Only the checks read it.
-        self.prefix_of: dict[bytes, tuple[int, ...]] = {}
         # Coverage counters, so a check can prove the interesting paths actually ran.
         self.stats = {"hit_lookups": 0, "capped_full_hit_lookups": 0, "evictions": 0, "duplicates": 0}
 
@@ -138,8 +136,6 @@ class PagedKVCache:
             holders = self.cached.setdefault(idents[i], [])
             if holders:
                 self.stats["duplicates"] += 1
-            else:
-                self.prefix_of[idents[i]] = tuple(seq.tokens[: (i + 1) * bs])
             holders.append(b)
         seq.num_cached_blocks = max(seq.num_cached_blocks, len(idents))
 
@@ -152,7 +148,6 @@ class PagedKVCache:
         holders.remove(b)
         if not holders:
             del self.cached[ident]
-            del self.prefix_of[ident]
         self.identity[b] = None
 
     # ---- release ------------------------------------------------------------------------------
@@ -181,10 +176,6 @@ class PagedKVCache:
     def free_order(self) -> list[int]:
         return list(self.free)
 
-    def cache_view(self) -> list[tuple[tuple[int, ...], list[int]]]:
-        """(token prefix, holders in hit-priority order) for every cached identity.
-
-        Keyed by the prefix itself, not by a hash, so it can be compared with vLLM even though the
-        two sides hash differently, and a swapped or wrong identity shows up as a different prefix.
-        """
-        return sorted((self.prefix_of[k], list(v)) for k, v in self.cached.items())
+    def cache_holders(self) -> dict[bytes, list[int]]:
+        """identity -> holder block ids in hit-priority order (the first one is what a hit returns)."""
+        return {k: list(v) for k, v in self.cached.items()}

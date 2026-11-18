@@ -1,6 +1,7 @@
 {
   "check": "01-paged-kv-prefix-cache differential vs vLLM KVCacheManager",
   "vllm": "0.34.0",
+  "vllm_commit": "g62d4bc3c7",
   "torch": "2.14.0+cpu",
   "python": "3.12.15",
   "configs": [
@@ -22,6 +23,33 @@
   "traces_run": 900,
   "traces_expected": 900,
   "mutation": null,
+  "directed_cases": [
+    {
+      "case": "token boundary",
+      "hit_tokens": 0,
+      "expected": 0
+    },
+    {
+      "case": "token order",
+      "hit_tokens": 0,
+      "expected": 0
+    },
+    {
+      "case": "same last block, different parent",
+      "hit_tokens": 0,
+      "expected": 0
+    },
+    {
+      "case": "identical prompt, last token recomputed",
+      "hit_tokens": 4,
+      "expected": 4
+    },
+    {
+      "case": "shared first block only",
+      "hit_tokens": 4,
+      "expected": 4
+    }
+  ],
   "op_totals": {
     "admit_attempts": 66416,
     "admit_ok": 51822,
@@ -59,6 +87,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 38.53,
-  "peak_rss_mib": 534.2
+  "seconds": 54.2,
+  "peak_rss_mib": 534.9
 }

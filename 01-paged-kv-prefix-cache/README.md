@@ -112,7 +112,7 @@ sequence and extended as tokens arrive, as vLLM does, so a decode step hashes at
 | File | What it does |
 |---|---|
 | `impl.py` | The block manager: `lookup`, `allocate`, `free_seq` |
-| `oracle.py` | Drives vLLM's `KVCacheManager` with a synthetic `Request` on CPU. No model, no tensors. Refuses any vLLM other than 0.34.0. |
+| `oracle.py` | Drives vLLM's `KVCacheManager` with a synthetic `Request` on CPU. No model, no tensors. Refuses any vLLM other than 0.34.0 built from commit `g62d4bc3c7`. |
 | `check.py` | Random traces fed to both sides, compared after every operation, plus a self-test |
 
 Assumes Linux x86-64 with glibc 2.39 or newer (for the wheel), a working user systemd (for
@@ -141,9 +141,23 @@ divergence inside a block, block-aligned prompts, and pool exhaustion all happen
 **Compared after every operation (exact equality):** admission success, hit length, hit block ids,
 every live block table, every request's tokens and computed-token count (running and waiting), every
 reference count, the full free-queue order, and the cache as a map from token prefix to holder block ids
-in hit-priority order. Each side translates its own hashes back to token prefixes, so the two share no
-hashing code and a wrong or swapped identity shows up as a different prefix. When an allocation is
-refused, both sides must be exactly as they were before the call.
+in hit-priority order. The checker labels each cached digest with a token prefix from the requests' own
+hash chains (`block_digest` over the tokens for `impl.py`, `Request.block_hashes` for vLLM), never from
+what the cache recorded when it registered a block. So the two sides share no hashing code, a block
+registered under the wrong identity shows up as a wrong prefix, and two prefixes sharing one digest are
+reported as a collision. State is also compared right after every allocation, before the driver does
+any bookkeeping. When an allocation is refused, the full raw state of both sides (including tokens and
+per-request hashes) must be exactly as it was before the call.
+
+**Directed hashing cases** run first, each as: admit A, finish A, then look up B.
+
+| Case | A | B | Expected hit tokens |
+|---|---|---|---|
+| Token boundary | `1 2345 6 7 9` | `1234 5 6 7 9` | 0 |
+| Token order | `1 2 3 4 9` | `2 1 3 4 9` | 0 |
+| Same last block, different parent | `1 1 1 1 5 6 7 8 9` | `2 2 2 2 5 6 7 8 9` | 0 |
+| Identical prompt (last token recomputed) | `1 … 8` | `1 … 8` | 4 |
+| Shared first block only | `1 … 8 9` | `1 2 3 4 5 6 7 0 9` | 4 |
 
 Tokens are mostly drawn from 0–7, so prefixes collide often, with some real-vocabulary ids (1,000 to
 151,000) mixed in.
@@ -162,7 +176,8 @@ the last-token rule gave up a cached block, evictions, and duplicate cached bloc
 66,416 admission attempts (51,822 succeeded, 14,594 refused for lack of blocks), 68,443 successful
 decodes, 29,784 finishes, and 15,357 preemptions, of which 1,380 came from a refused decode. Coverage:
 19,052 lookups with a hit (163,900 hit tokens), 235 lookups capped by the last-token rule, 53,178
-evictions, and 242 duplicate cached blocks. The run took 38.5 s with a peak RSS of 534 MiB.
+evictions, and 242 duplicate cached blocks. All five directed cases matched on both sides. The run took
+54 s with a peak RSS of 535 MiB.
 
 **Self-test** ([results/self_test.json](results/self_test.json)): **passed**. Each planted bug was
 reported as a mismatch:
@@ -170,12 +185,16 @@ reported as a mismatch:
 | Planted bug | Caught by |
 |---|---|
 | Release head-first | free-queue order |
-| No last-token rule | hit length |
+| No last-token rule | directed case: identical prompt |
 | Hit the newest duplicate | hit block ids |
 | Uncached blocks released to the tail | free-queue order |
 | Hits on free blocks cost nothing at admission | admission success |
-| Hash only `token % 4` | hit length |
+| Hash only `token % 4` | directed case: shared first block only |
+| Serialize tokens without delimiters | directed case: token boundary |
+| Register full blocks under their identities in reverse order | cache right after allocation |
 | A refused allocation changes the computed-token count | state after refusal |
+| A refused allocation clears the sequence's block identities | state after refusal |
+| A successful allocation changes the computed-token count | state right after allocation |
 
 ## 6. In the engines
 

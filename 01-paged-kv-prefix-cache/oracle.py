@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import torch
 import vllm
-from packaging.version import Version
+import vllm._version
 from vllm.sampling_params import SamplingParams
 from vllm.utils.hashing import sha256
 from vllm.v1.core.kv_cache_manager import KVCacheManager
@@ -17,9 +17,10 @@ from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCache
 from vllm.v1.request import Request
 
 
-EXPECTED_VLLM = "0.34.0"  # the +cpu local build suffix is allowed, nothing else
-if Version(vllm.__version__).public != EXPECTED_VLLM:
-    raise SystemExit(f"oracle expects vLLM {EXPECTED_VLLM}, found {vllm.__version__}")
+EXPECTED_VLLM = ("0.34.0", "g62d4bc3c7")  # version and the commit the wheel was built from
+FOUND_VLLM = (vllm.__version__, vllm._version.__commit_id__)
+if FOUND_VLLM != EXPECTED_VLLM:
+    raise SystemExit(f"oracle expects vLLM {EXPECTED_VLLM}, found {FOUND_VLLM}")
 
 
 class VllmKVCache:
@@ -44,9 +45,6 @@ class VllmKVCache:
             enable_caching=True,
         )
         self.pool = self.mgr.block_pool
-        # vLLM block hash -> token prefix, learned from each request's own block_hashes. Used only to
-        # express vLLM's cache in terms of token prefixes, so it can be compared with impl.py.
-        self.prefix_by_hash: dict[bytes, tuple[int, ...]] = {}
 
     def new_request(self, req_id: str, tokens: list[int]) -> Request:
         sp = SamplingParams(max_tokens=1 << 20)
@@ -66,12 +64,7 @@ class VllmKVCache:
         return blocks, num_hit_tokens
 
     def allocate(self, req: Request, num_new_tokens: int, blocks, num_hit_tokens: int):
-        out = self.mgr.allocate_slots(req, num_new_tokens, num_hit_tokens, blocks)
-        tokens = req.all_token_ids
-        bs = self.block_size
-        for i, h in enumerate(req.block_hashes):
-            self.prefix_by_hash.setdefault(h, tuple(tokens[: (i + 1) * bs]))
-        return out
+        return self.mgr.allocate_slots(req, num_new_tokens, num_hit_tokens, blocks)
 
     def free_seq(self, req: Request) -> None:
         self.mgr.free(req)
@@ -79,6 +72,8 @@ class VllmKVCache:
     # ---- state views, same shape as impl.PagedKVCache ----
 
     def block_table(self, req_id: str) -> list[int]:
+        if req_id not in self.mgr.coordinator.single_type_managers[0].req_to_blocks:
+            return []
         return list(self.mgr.get_block_ids(req_id)[0])
 
     def ref_cnt(self) -> list[int]:
@@ -87,15 +82,17 @@ class VllmKVCache:
     def free_order(self) -> list[int]:
         return [b.block_id for b in self.pool.free_block_queue.get_all_free_blocks()]
 
-    def cache_view(self) -> list[tuple[tuple[int, ...], list[int]]]:
-        """(token prefix, holders in hit-priority order) for every cached hash. Reads
-        BlockHashToBlockMap's two dicts: `_cache` holds the block a hit returns, `_dup_ids` all
-        holders in insertion order."""
+    def cache_holders(self) -> dict[bytes, list[int]]:
+        """block hash -> holder block ids in hit-priority order. Reads BlockHashToBlockMap's two
+        dicts: `_cache` holds the block a hit returns, `_dup_ids` all holders in insertion order."""
         m = self.pool.cached_block_hash_to_block
-        out = []
+        out = {}
         for key, first in m._cache.items():
             dups = m._dup_ids.get(key)
             holders = list(dups) if dups is not None else [first]
             assert holders[0] == first, "primary holder is not first in insertion order"
-            out.append((self.prefix_by_hash[get_block_hash(key)], holders))
-        return sorted(out)
+            out[bytes(get_block_hash(key))] = holders
+        return out
+
+    def raw_block_hashes(self) -> list:
+        return [None if b.block_hash is None else bytes(b.block_hash) for b in self.pool.blocks]

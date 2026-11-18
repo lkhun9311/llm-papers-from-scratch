@@ -4,8 +4,16 @@ Each trace is a sequence of scheduler-like operations (admit, decode, finish, pr
 operation the two sides must agree on: admission success, prefix-hit length and block ids, every
 live block table, every request's token list and computed-token count (running and waiting), every
 block's reference count, the full free-queue order, and the cache as (token prefix -> holder block ids
-in hit-priority order). A refused allocation must leave each side exactly as it was. Independent
-invariants are checked on impl alone.
+in hit-priority order). State is compared right after each allocation too, before the driver does any
+scheduler bookkeeping, and a refused allocation must leave each side exactly as it was.
+
+Cache entries are labelled with token prefixes by the checker, from each request's own hash chain
+(impl: block_digest over the tokens; vLLM: Request.block_hashes), never from what the cache recorded
+when it registered a block. A wrong identity registered for a block therefore shows up as a wrong
+prefix. A digest that two different prefixes map to is reported as a collision.
+
+Directed hashing cases run first: token boundaries ([1, 2345, ...] vs [1234, 5, ...]), token order,
+same last block under different parents, and identical prompts.
 
 A pass also requires that every trace runs to the end and that prefix-hit lookups, capped full-hit
 lookups, evictions and duplicate cached blocks each happen at least MIN_COVERAGE times.
@@ -20,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import dataclasses
 import json
 import platform
 import random
@@ -68,7 +77,7 @@ def gen_prompt(rng: random.Random, block_size: int, prefixes: list[list[int]]) -
     return (base[:cut] + tail) or [gen_token(rng)]
 
 
-def check_invariants(kv: PagedKVCache, live: dict[str, Seq]) -> None:
+def check_invariants(kv: PagedKVCache, live: dict[str, Seq], labels: Labels) -> None:
     """Properties that must hold whatever the eviction policy; written without reference to vLLM."""
     n = len(kv.ref_cnt)
     bs = kv.block_size
@@ -94,17 +103,48 @@ def check_invariants(kv: PagedKVCache, live: dict[str, Seq]) -> None:
         if len(s.block_table) < -(-s.num_computed // bs):
             raise Mismatch(f"invariant: {s.seq_id} has {len(s.block_table)} blocks for {s.num_computed} tokens")
         for i, b in enumerate(s.block_table[: s.num_cached_blocks]):
-            if kv.prefix_of.get(kv.identity[b]) != tuple(s.tokens[: (i + 1) * bs]):
+            if labels.mine.get(kv.identity[b]) != tuple(s.tokens[: (i + 1) * bs]):
                 raise Mismatch(f"invariant: {s.seq_id} block {i} (id {b}) is cached under another prefix")
 
 
+class Labels:
+    """Token prefix for every digest, built by the checker from each request's own hash chain."""
+
+    def __init__(self, block_size: int):
+        self.bs = block_size
+        self.mine: dict[bytes, tuple[int, ...]] = {}
+        self.ref: dict[bytes, tuple[int, ...]] = {}
+
+    def _add(self, table, digest, prefix, side):
+        old = table.setdefault(digest, prefix)
+        if old != prefix:
+            raise Mismatch(f"{side} hash collision: {old} and {prefix} share a digest")
+
+    def observe(self, s: Seq, req) -> None:
+        parent = b""
+        for i in range(len(s.tokens) // self.bs):
+            prefix = tuple(s.tokens[: (i + 1) * self.bs])
+            parent = impl.block_digest(parent, list(prefix[-self.bs :]))
+            self._add(self.mine, parent, prefix, "impl")
+        toks = list(req.all_token_ids)
+        for i, h in enumerate(req.block_hashes):
+            self._add(self.ref, bytes(h), tuple(toks[: (i + 1) * self.bs]), "vllm")
+
+    def view(self, holders: dict[bytes, list[int]], table) -> list:
+        try:
+            return sorted((table[k], v) for k, v in holders.items())
+        except KeyError as e:
+            raise Mismatch(f"cached digest {e.args[0]!r} matches no request prefix")
+
+
 def snapshot(mine: PagedKVCache, ref: VllmKVCache, seqs: list[tuple[Seq, object]]):
+    """Full raw state of each side, for 'nothing changed' checks."""
     return (
-        copy.deepcopy((mine.ref_cnt, list(mine.free), mine.cache_view(),
-                       [(s.block_table, s.num_computed, s.num_cached_blocks, len(s.tokens)) for s, _ in seqs])),
-        copy.deepcopy((ref.ref_cnt(), ref.free_order(), ref.cache_view(),
-                       [(ref.block_table(r.request_id) if s.block_table else [], r.num_computed_tokens, r.num_tokens)
-                        for s, r in seqs])),
+        copy.deepcopy((mine.ref_cnt, list(mine.free), mine.cache_holders(), mine.identity,
+                       [dataclasses.asdict(s) for s, _ in seqs])),
+        copy.deepcopy((ref.ref_cnt(), ref.free_order(), ref.cache_holders(), ref.raw_block_hashes(),
+                       [(ref.block_table(r.request_id), r.num_computed_tokens, list(r.all_token_ids),
+                         [bytes(h) for h in r.block_hashes]) for _, r in seqs])),
     )
 
 
@@ -115,6 +155,7 @@ def run_trace(seed: int, block_size: int, num_blocks: int, num_ops: int) -> dict
     prefixes = [[gen_token(rng) for _ in range(rng.randint(block_size, 3 * block_size))] for _ in range(3)]
     running: dict[str, tuple[Seq, object]] = {}
     waiting: list[tuple[Seq, object]] = []
+    labels = Labels(block_size)
     counts = {"admit_attempts": 0, "admit_ok": 0, "admit_refused": 0, "hit_tokens": 0,
               "decode_ok": 0, "decode_refused": 0, "finish": 0, "preempt": 0}
     next_id = 0
@@ -123,26 +164,33 @@ def run_trace(seed: int, block_size: int, num_blocks: int, num_ops: int) -> dict
         return list(running.values()) + waiting
 
     def try_allocate(step, s, req, n_new, hit, blocks, ref_hit_tokens):
-        before = snapshot(mine, ref, all_seqs() + [(s, req)])
+        seqs = [x for x in all_seqs() if x[0] is not s] + [(s, req)]
+        before = snapshot(mine, ref, seqs)
         got = mine.allocate(s, n_new, hit)
         got_ref = ref.allocate(req, n_new, blocks, ref_hit_tokens)
         compare(f"{step} success", got is not None, got_ref is not None)
         if got is None:  # a refusal must change nothing, on either side
-            after = snapshot(mine, ref, all_seqs() + [(s, req)])
+            after = snapshot(mine, ref, seqs)
             compare(f"{step} impl state after refusal", after[0], before[0])
             compare(f"{step} vllm state after refusal", after[1], before[1])
+        else:  # compare before the driver touches anything
+            sync_state(f"{step} right after allocation", seqs, {**{k: v[0] for k, v in running.items()}, s.seq_id: s})
         return got is not None
 
-    def sync_state(step: str) -> None:
+    def sync_state(step: str, seqs=None, live=None) -> None:
+        seqs = all_seqs() if seqs is None else seqs
+        live = {sid: s for sid, (s, _) in running.items()} if live is None else live
+        for s, req in seqs:
+            labels.observe(s, req)
         compare(f"{step} ref_cnt", mine.ref_cnt[1:], ref.ref_cnt()[1:])
         compare(f"{step} free order", mine.free_order(), ref.free_order())
-        compare(f"{step} cache", mine.cache_view(), ref.cache_view())
-        for s, req in all_seqs():
+        compare(f"{step} cache", labels.view(mine.cache_holders(), labels.mine),
+                labels.view(ref.cache_holders(), labels.ref))
+        for s, req in seqs:
             compare(f"{step} tokens {s.seq_id}", s.tokens, list(req.all_token_ids))
             compare(f"{step} computed {s.seq_id}", s.num_computed, req.num_computed_tokens)
-        for sid, (s, _) in running.items():
-            compare(f"{step} block table {sid}", s.block_table, ref.block_table(sid))
-        check_invariants(mine, {sid: s for sid, (s, _) in running.items()})
+            compare(f"{step} block table {s.seq_id}", s.block_table, ref.block_table(s.seq_id))
+        check_invariants(mine, live, labels)
 
     def append_token(s, req):
         tok = gen_token(rng)
@@ -208,6 +256,35 @@ def run_trace(seed: int, block_size: int, num_blocks: int, num_ops: int) -> dict
     return counts
 
 
+DIRECTED = [
+    # (name, first prompt, second prompt, block size, expected hit tokens for the second prompt)
+    ("token boundary", [1, 2345, 6, 7, 9], [1234, 5, 6, 7, 9], 4, 0),
+    ("token order", [1, 2, 3, 4, 9], [2, 1, 3, 4, 9], 4, 0),
+    ("same last block, different parent", [1, 1, 1, 1, 5, 6, 7, 8, 9], [2, 2, 2, 2, 5, 6, 7, 8, 9], 4, 0),
+    ("identical prompt, last token recomputed", [1, 2, 3, 4, 5, 6, 7, 8], [1, 2, 3, 4, 5, 6, 7, 8], 4, 4),
+    ("shared first block only", [1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 5, 6, 7, 0, 9], 4, 4),
+]
+
+
+def run_directed() -> list[dict]:
+    """Admit A, finish it, admit B: B's hit must equal the expected value on both sides."""
+    rows = []
+    for name, a, b, bs, expect in DIRECTED:
+        mine, ref = PagedKVCache(16, bs), VllmKVCache(16, bs)
+        sa, ra = Seq("a", list(a)), ref.new_request("a", list(a))
+        mine.allocate(sa, len(a), [])
+        ref.allocate(ra, len(a), None, 0)
+        mine.free_seq(sa)
+        ref.free_seq(ra)
+        sb, rb = Seq("b", list(b)), ref.new_request("b", list(b))
+        got = len(mine.lookup(sb)) * bs
+        _, got_ref = ref.lookup(rb)
+        compare(f"directed '{name}' hit tokens", got, got_ref)
+        compare(f"directed '{name}' expected hit", got, expect)
+        rows.append({"case": name, "hit_tokens": got, "expected": expect})
+    return rows
+
+
 MUTATIONS = {
     # Each plants one plausible bug. The check must report a mismatch for every one of them.
     "free_head_first": "release blocks head-first instead of tail-first",
@@ -217,6 +294,10 @@ MUTATIONS = {
     "free_hits_cost_nothing": "do not count hits on free blocks against free capacity at admission",
     "hash_low_bits": "hash only token % 4, so different blocks collide",
     "refusal_side_effect": "a refused allocation still bumps the computed-token count",
+    "refusal_drops_hashes": "a refused allocation clears the sequence's cached block identities",
+    "success_side_effect": "a successful allocation also bumps the computed-token count",
+    "register_wrong_identity": "register full blocks with their identities in reverse order",
+    "concat_serialization": "serialize block tokens without delimiters, so [1, 2345] == [1234, 5]",
 }
 
 
@@ -289,6 +370,45 @@ def apply_mutation(name: str) -> None:
             return out
 
         K.allocate = allocate
+    elif name == "refusal_drops_hashes":
+        orig_alloc = K.allocate
+
+        def allocate(self, seq, num_new_tokens, hit):
+            out = orig_alloc(self, seq, num_new_tokens, hit)
+            if out is None:
+                seq.idents.clear()
+            return out
+
+        K.allocate = allocate
+    elif name == "success_side_effect":
+        orig_alloc = K.allocate
+
+        def allocate(self, seq, num_new_tokens, hit):
+            out = orig_alloc(self, seq, num_new_tokens, hit)
+            if out is not None:
+                seq.num_computed += 123
+            return out
+
+        K.allocate = allocate
+    elif name == "register_wrong_identity":
+        def _cache_full_blocks(self, seq, num_tokens):
+            bs = self.block_size
+            idents = self._idents(seq)[: num_tokens // bs][::-1]
+            for i in range(seq.num_cached_blocks, len(idents)):
+                b = seq.block_table[i]
+                self.identity[b] = idents[i]
+                holders = self.cached.setdefault(idents[i], [])
+                if holders:
+                    self.stats["duplicates"] += 1
+                holders.append(b)
+            seq.num_cached_blocks = max(seq.num_cached_blocks, len(idents))
+
+        K._cache_full_blocks = _cache_full_blocks
+    elif name == "concat_serialization":
+        import hashlib
+
+        impl.block_digest = lambda parent, toks: hashlib.blake2b(
+            parent + "".join(map(str, toks)).encode(), digest_size=16).digest()
     else:
         sys.exit(f"unknown mutation {name}; choose from {sorted(MUTATIONS)}")
 
@@ -335,12 +455,20 @@ def main() -> int:
 
     import torch
     import vllm
+    import vllm._version
 
     t0 = time.time()
     totals: dict[str, int] = {}
     failure = error = None
     traces_run = 0
-    for cfg_i, (bs, nb) in enumerate(CONFIGS):
+    directed = []
+    try:
+        directed = run_directed()
+    except Mismatch as e:
+        failure = str(e)
+    except Exception as e:
+        error = f"directed: {type(e).__name__}: {e}"
+    for cfg_i, (bs, nb) in enumerate(CONFIGS if not (failure or error) else []):
         for t in range(args.traces):
             seed = cfg_i * 100_000 + t
             try:
@@ -360,10 +488,12 @@ def main() -> int:
     expected_traces = len(CONFIGS) * args.traces
     coverage = {k: totals.get(k, 0) for k in ("hit_lookups", "capped_full_hit_lookups", "evictions", "duplicates")}
     short = [k for k, v in coverage.items() if v < MIN_COVERAGE]
-    passed = failure is None and error is None and traces_run == expected_traces and not short
+    passed = (failure is None and error is None and traces_run == expected_traces and not short
+              and len(directed) == len(DIRECTED))
     result = {
         "check": "01-paged-kv-prefix-cache differential vs vLLM KVCacheManager",
         "vllm": vllm.__version__,
+        "vllm_commit": vllm._version.__commit_id__,
         "torch": torch.__version__,
         "python": platform.python_version(),
         "configs": [{"block_size": bs, "num_blocks": nb} for bs, nb in CONFIGS],
@@ -372,6 +502,7 @@ def main() -> int:
         "traces_run": traces_run,
         "traces_expected": expected_traces,
         "mutation": args.mutate,
+        "directed_cases": directed,
         "op_totals": totals,
         "coverage": coverage,
         "coverage_minimum": MIN_COVERAGE,
