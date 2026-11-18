@@ -1,12 +1,14 @@
 """Paged KV-cache block manager with prefix caching.
 
-Paging (fixed-size blocks, per-sequence block tables, reference counts) comes from the PagedAttention
-paper. Prefix caching and its policies are not in that paper: hashed block identities, the null
-block, last-token recompute, oldest-duplicate hits, free-queue eviction order. Those follow vLLM V1
-on purpose, so the two can be compared step by step. The code is written separately; README.md lists
-each borrowed policy and where vLLM implements it.
+The PagedAttention paper introduces paging (fixed-size blocks, per-sequence block tables, reference
+counts) and also describes caching shared prefixes (its section 4.4). Finding shared prefixes
+automatically by hashing every full block, and the exact policies used here (null block, last-token
+recompute, oldest-duplicate hits, free-queue eviction order), follow vLLM V1 at the pinned commit, so
+the two can be compared step by step. The code is written separately; README.md lists each borrowed
+policy and where vLLM implements it.
 
-Scope: one full-attention KV cache group, synchronous scheduling, text tokens only, no speculation.
+Scope: one full-attention KV cache group, hash block size equal to block size, synchronous
+scheduling, text tokens only, no speculation, no chunked prefill.
 
 No model and no tensors: a "block" is only an id plus metadata. What is simulated is the bookkeeping
 that decides which physical block holds which tokens.
@@ -20,21 +22,15 @@ from dataclasses import dataclass, field
 NULL_BLOCK = 0  # block 0 is reserved as a placeholder and never handed out
 
 
-def chain_hashes(tokens: list[int], block_size: int) -> list[bytes]:
-    """Identity of each full block: digest(parent identity, this block's tokens).
+def block_digest(parent: bytes, block_tokens: list[int]) -> bytes:
+    """Identity of one full block: digest(parent identity, this block's tokens).
 
-    Two blocks are interchangeable only when every earlier token is identical too, so the identity
-    must cover the whole prefix. Chaining the parent digest does that in fixed size per block.
-    A trailing partial block has no identity and is never shared.
+    Two blocks may be reused for each other only when every earlier token is identical too, so the
+    identity must cover the whole prefix. Chaining the parent digest does that in fixed size.
     """
-    out: list[bytes] = []
-    parent = b""
-    for start in range(0, len(tokens) - block_size + 1, block_size):
-        h = hashlib.blake2b(parent, digest_size=16)
-        h.update(repr(tokens[start : start + block_size]).encode())
-        parent = h.digest()
-        out.append(parent)
-    return out
+    h = hashlib.blake2b(parent, digest_size=16)
+    h.update(repr(block_tokens).encode())
+    return h.digest()
 
 
 @dataclass
@@ -46,6 +42,7 @@ class Seq:
     num_computed: int = 0
     block_table: list[int] = field(default_factory=list)
     num_cached_blocks: int = 0  # leading blocks of block_table already registered in the cache
+    idents: list[bytes] = field(default_factory=list)  # identities of full blocks, built incrementally
 
 
 class PagedKVCache:
@@ -59,28 +56,41 @@ class PagedKVCache:
         # identity -> block ids holding it, oldest first. Duplicates are kept on purpose: merging
         # them would change a running request's block table, and block tables are append-only.
         self.cached: dict[bytes, list[int]] = {}
+        # identity -> the token prefix it stands for. Only the checks read it.
+        self.prefix_of: dict[bytes, tuple[int, ...]] = {}
         # Coverage counters, so a check can prove the interesting paths actually ran.
-        self.stats = {"evictions": 0, "duplicates": 0, "capped_full_hits": 0}
+        self.stats = {"hit_lookups": 0, "capped_full_hit_lookups": 0, "evictions": 0, "duplicates": 0}
+
+    def _idents(self, seq: Seq) -> list[bytes]:
+        """Identities of all full blocks of seq.tokens. Tokens are append-only, so this only extends."""
+        bs = self.block_size
+        while (len(seq.idents) + 1) * bs <= len(seq.tokens):
+            i = len(seq.idents)
+            parent = seq.idents[-1] if seq.idents else b""
+            seq.idents.append(block_digest(parent, seq.tokens[i * bs : (i + 1) * bs]))
+        return seq.idents
 
     # ---- lookup -------------------------------------------------------------------------------
 
     def lookup(self, seq: Seq) -> list[int]:
-        """Longest cached prefix, in whole blocks. Read-only.
+        """Longest cached prefix, in whole blocks. Does not change the cache.
 
-        At most len(tokens) - 1 tokens may hit: the last token must run through the model to
-        produce logits, and because hits are whole blocks a fully cached prompt recomputes its
-        whole last block.
+        Probes blocks in order until the first miss or the hit limit. At most len(tokens) - 1 tokens
+        may hit: the last token must run through the model to produce logits, and because hits are
+        whole blocks a fully cached block-aligned prompt recomputes its whole last block.
         """
         max_blocks = max(len(seq.tokens) - 1, 0) // self.block_size
-        idents = chain_hashes(seq.tokens, self.block_size)
+        idents = self._idents(seq)
         hit: list[int] = []
         for ident in idents[:max_blocks]:
             holders = self.cached.get(ident)
             if not holders:
                 break
             hit.append(holders[0])
+        if hit:
+            self.stats["hit_lookups"] += 1
         if len(hit) == max_blocks < len(idents) and idents[max_blocks] in self.cached:
-            self.stats["capped_full_hits"] += 1  # the last-token rule cost a whole cached block
+            self.stats["capped_full_hit_lookups"] += 1  # the last-token rule gave up a cached block
         return hit
 
     # ---- allocation ---------------------------------------------------------------------------
@@ -120,13 +130,16 @@ class PagedKVCache:
         return new_blocks
 
     def _cache_full_blocks(self, seq: Seq, num_tokens: int) -> None:
-        idents = chain_hashes(seq.tokens[:num_tokens], self.block_size)
+        bs = self.block_size
+        idents = self._idents(seq)[: num_tokens // bs]
         for i in range(seq.num_cached_blocks, len(idents)):
             b = seq.block_table[i]
             self.identity[b] = idents[i]
             holders = self.cached.setdefault(idents[i], [])
             if holders:
                 self.stats["duplicates"] += 1
+            else:
+                self.prefix_of[idents[i]] = tuple(seq.tokens[: (i + 1) * bs])
             holders.append(b)
         seq.num_cached_blocks = max(seq.num_cached_blocks, len(idents))
 
@@ -139,6 +152,7 @@ class PagedKVCache:
         holders.remove(b)
         if not holders:
             del self.cached[ident]
+            del self.prefix_of[ident]
         self.identity[b] = None
 
     # ---- release ------------------------------------------------------------------------------
@@ -167,7 +181,10 @@ class PagedKVCache:
     def free_order(self) -> list[int]:
         return list(self.free)
 
-    def cache_classes(self) -> list[list[int]]:
-        """Cached block ids grouped by identity, in hit-priority order (the first one is what a hit
-        returns). Comparable with vLLM without comparing hash values."""
-        return sorted(list(v) for v in self.cached.values())
+    def cache_view(self) -> list[tuple[tuple[int, ...], list[int]]]:
+        """(token prefix, holders in hit-priority order) for every cached identity.
+
+        Keyed by the prefix itself, not by a hash, so it can be compared with vLLM even though the
+        two sides hash differently, and a swapped or wrong identity shows up as a different prefix.
+        """
+        return sorted((self.prefix_of[k], list(v)) for k, v in self.cached.items())

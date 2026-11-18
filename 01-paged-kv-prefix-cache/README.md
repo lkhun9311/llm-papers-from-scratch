@@ -1,7 +1,7 @@
 # 01 · Paged KV cache and prefix caching
 
 A block manager that pages the KV cache and shares cached prefixes between requests, checked step by
-step against vLLM v0.34.0's `KVCacheManager` on 900 random traces (about 180,000 operations).
+step against vLLM v0.34.0's `KVCacheManager` on 900 random traces (180,000 operations).
 
 ## 1. What this covers
 
@@ -36,9 +36,10 @@ Questions you should be able to answer when done:
 
 ### Paging
 
-Without paging, a server reserves a contiguous region for each sequence's maximum length, because the
-final length is unknown. With paging, a sequence holds `ceil(T / B)` blocks for `T` tokens, taken from
-anywhere in the pool. The only waste is the unfilled tail of the last block:
+The baseline the paper compares against reserves a contiguous region for each sequence's maximum
+length, because the final length is unknown. With paging, a sequence holds `ceil(T / B)` blocks for
+`T` tokens, taken from anywhere in the pool. The allocation slack is only the unfilled tail of the last
+block (metadata, the null block and idle cached blocks are not counted here):
 
 ```
 waste_paged      = C · Σ_i (B · ceil(T_i / B) − T_i)   <  n · B · C
@@ -50,18 +51,24 @@ sequences. Uniform blocks also remove gaps between regions inside the pool.
 
 ### Identity and sharing
 
-Block `i` of two requests holds the same K/V only if all tokens up to the end of block `i` are equal,
-because attention at every position depends on every earlier token. So the identity chains the parent:
-`h_i = H(h_{i-1}, block_i)`. `impl.py` uses BLAKE2b over the parent digest and the block's tokens. vLLM
-uses SHA-256 with extra keys (LoRA id, multimodal ids, cache salt) that this directory leaves out.
+For the same model and the same request context, block `i` of two requests can be reused for each
+other when all tokens up to the end of block `i` are equal, because K/V at every position depends on
+every earlier token. So the identity chains the parent: `h_i = H(h_{i-1}, block_i)`. `impl.py` uses
+BLAKE2b over the parent digest and the block's tokens. vLLM's default is SHA-256 (other algorithms are
+configurable; the oracle sets SHA-256), plus extra keys (LoRA id, multimodal ids, cache salt) that this
+directory leaves out.
 
-A trailing partial block has no identity. It is private to its sequence, so the sequence can keep
-writing into it, and it never needs copy-on-write.
+A trailing partial block has no identity. In this directory's scope it is private to its sequence, so
+the sequence can keep writing into it and never needs copy-on-write. (The paper uses copy-on-write for
+a shared last block in parallel sampling and beam search, and vLLM has partial-hit paths for other
+configurations; both are outside this scope.)
 
 ### The rules borrowed from vLLM
 
-The PagedAttention paper defines paging and sharing. These policy details come from vLLM V1 instead,
-so the two implementations can be compared operation by operation:
+The PagedAttention paper defines paging and sharing, including caching shared prefixes (§4.4). Finding
+shared prefixes automatically by hashing every full block, and the policy details below, come from vLLM
+V1 at the pinned commit, so the two implementations can be compared operation by operation. They apply
+to this directory's scope (one full-attention group, hash block size equal to block size):
 
 | Rule | Why |
 |---|---|
@@ -91,11 +98,14 @@ Worked example, Qwen2.5-7B in BF16 (28 layers, 4 KV heads, head size 128):
 - Reserving 8,192 tokens contiguously for the same request takes **448 MiB**.
 - An 8 GiB KV budget holds about 149,796 tokens.
 
-DeepSeek-V2 with MLA (60 layers, `r = 512`, `d_rope = 64`, BF16) caches 69,120 bytes, which is **67.5 KiB
-per token**. Its 128 heads as plain MHA would need 4.69 MiB per token, 71× more.
+DeepSeek-V2 with MLA (60 layers, `r = 512`, `d_rope = 64`, BF16) caches `(512 + 64) · 2 · 60 = 69,120`
+bytes, which is **67.5 KiB per token**. Its 128 heads expanded to per-head K and V would need more: keys
+are 192-dimensional (128 + 64 for RoPE) and values 128-dimensional, so
+`128 · (192 + 128) · 2 · 60 = 4,915,200` bytes, which is 4.69 MiB per token, 71× more.
 
-Compute: a prefix hit of `k` blocks skips `k · B` tokens of prefill. Lookup costs one hash per full
-block and one dictionary probe per hit.
+Compute: a prefix hit of `k` blocks skips `k · B` tokens of prefill. A lookup probes blocks in order
+until the first miss or the hit limit, one dictionary probe each. Block identities are kept on each
+sequence and extended as tokens arrive, as vLLM does, so a decode step hashes at most one new block.
 
 ## 4. Code and how to run it
 
@@ -104,6 +114,9 @@ block and one dictionary probe per hit.
 | `impl.py` | The block manager: `lookup`, `allocate`, `free_seq` |
 | `oracle.py` | Drives vLLM's `KVCacheManager` with a synthetic `Request` on CPU. No model, no tensors. Refuses any vLLM other than 0.34.0. |
 | `check.py` | Random traces fed to both sides, compared after every operation, plus a self-test |
+
+Assumes Linux x86-64 with glibc 2.39 or newer (for the wheel), a working user systemd (for
+`run-capped`), and the repository root as the starting directory.
 
 ```bash
 uv venv -p 3.12 .venv
@@ -126,22 +139,30 @@ finish, or preempt. Prompts reuse three random prefixes and are cut at random po
 divergence inside a block, block-aligned prompts, and pool exhaustion all happen.
 
 **Compared after every operation (exact equality):** admission success, hit length, hit block ids,
-every live block table, every reference count, the full free-queue order, and the cached blocks grouped
-by identity in hit-priority order. Identities are compared as groups of block ids, not as hash values,
-so the two sides share no hashing code.
+every live block table, every request's tokens and computed-token count (running and waiting), every
+reference count, the full free-queue order, and the cache as a map from token prefix to holder block ids
+in hit-priority order. Each side translates its own hashes back to token prefixes, so the two share no
+hashing code and a wrong or swapped identity shows up as a different prefix. When an allocation is
+refused, both sides must be exactly as they were before the call.
+
+Tokens are mostly drawn from 0–7, so prefixes collide often, with some real-vocabulary ids (1,000 to
+151,000) mixed in.
 
 **Invariants checked on `impl.py` alone:** a block's reference count equals the number of block tables
 that contain it; reference count 0 if and only if the block is in the free queue; a block shared by two
-sequences has an identity; every cached block is listed under its own identity; every sequence has
-enough blocks for its computed tokens.
+sequences has an identity; every cached block is listed under its own identity and vice versa; every
+cached block in a sequence's table stands for that sequence's actual prefix; every sequence has enough
+blocks for its computed tokens.
 
-**Coverage required for a pass:** every trace runs to the end. Prefix hits, evictions, duplicate cached
-blocks, and last-token-capped full hits each happen at least 20 times.
+**Coverage required for a pass:** every trace runs to the end. Lookups with a prefix hit, lookups where
+the last-token rule gave up a cached block, evictions, and duplicate cached blocks each happen at least
+20 times.
 
-**Result** ([results/check.json](results/check.json)): **passed**. 900 of 900 traces ran: 51,848
-admissions (14,626 refused for lack of blocks), 68,389 decodes, 29,750 finishes, and 15,387 preemptions.
-Coverage: 174,808 hit tokens, 51,725 evictions, 497 duplicate blocks, and 412 capped full hits. The run
-took 6.7 s with a peak RSS of 534 MiB.
+**Result** ([results/check.json](results/check.json)): **passed**. 900 of 900 traces ran:
+66,416 admission attempts (51,822 succeeded, 14,594 refused for lack of blocks), 68,443 successful
+decodes, 29,784 finishes, and 15,357 preemptions, of which 1,380 came from a refused decode. Coverage:
+19,052 lookups with a hit (163,900 hit tokens), 235 lookups capped by the last-token rule, 53,178
+evictions, and 242 duplicate cached blocks. The run took 38.5 s with a peak RSS of 534 MiB.
 
 **Self-test** ([results/self_test.json](results/self_test.json)): **passed**. Each planted bug was
 reported as a mismatch:
@@ -153,6 +174,8 @@ reported as a mismatch:
 | Hit the newest duplicate | hit block ids |
 | Uncached blocks released to the tail | free-queue order |
 | Hits on free blocks cost nothing at admission | admission success |
+| Hash only `token % 4` | hit length |
+| A refused allocation changes the computed-token count | state after refusal |
 
 ## 6. In the engines
 

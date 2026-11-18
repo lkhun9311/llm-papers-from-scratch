@@ -23,38 +23,42 @@
   "traces_expected": 900,
   "mutation": null,
   "op_totals": {
-    "admit": 51848,
-    "admit_fail": 14626,
-    "hit_tokens": 174808,
-    "decode": 68389,
-    "decode_fail": 1396,
-    "finish": 29750,
-    "preempt": 15387,
-    "evictions": 51725,
-    "duplicates": 497,
-    "capped_full_hits": 412
+    "admit_attempts": 66416,
+    "admit_ok": 51822,
+    "admit_refused": 14594,
+    "hit_tokens": 163900,
+    "decode_ok": 68443,
+    "decode_refused": 1380,
+    "finish": 29784,
+    "preempt": 15357,
+    "hit_lookups": 19052,
+    "capped_full_hit_lookups": 235,
+    "evictions": 53178,
+    "duplicates": 242
   },
+  "coverage": {
+    "hit_lookups": 19052,
+    "capped_full_hit_lookups": 235,
+    "evictions": 53178,
+    "duplicates": 242
+  },
+  "coverage_minimum": 20,
+  "coverage_short": [],
   "compared_each_op": [
     "admission success",
     "hit tokens",
     "hit block ids",
     "block tables",
+    "tokens and computed counts (running and waiting)",
     "ref counts",
     "free-queue order",
-    "cache identity classes",
+    "cache as token prefix -> ordered holders",
+    "no state change on refusal",
     "impl invariants"
   ],
-  "coverage": {
-    "hit_tokens": 174808,
-    "evictions": 51725,
-    "duplicates": 497,
-    "capped_full_hits": 412
-  },
-  "coverage_minimum": 20,
-  "coverage_short": [],
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 6.74,
+  "seconds": 38.53,
   "peak_rss_mib": 534.2
 }
