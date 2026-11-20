@@ -60,7 +60,7 @@ def residual(p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
 
 
 def accept_ratio(p: torch.Tensor, q: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-    """p(x) / q(x) for each draft position; accept when a uniform draw is <= this."""
+    """p(x) / q(x) for each draft position; accept when a uniform draw on [0, 1) is below this."""
     idx = torch.arange(x.shape[0])
     return p[idx, x] / q[idx, x]
 
