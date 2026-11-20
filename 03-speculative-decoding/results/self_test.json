@@ -118,7 +118,7 @@
       "what": "Mamba keeps a snapshot per token of a forward call and trims only after it",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "directed peak snapshots during a 60-token prefill, window 4: False != True",
+      "first_mismatch": "directed peak live states during a 60-token prefill, window 4: False != True",
       "error": null
     },
     {
@@ -126,7 +126,15 @@
       "what": "Mamba adds a snapshot before trimming, so it briefly holds window + 2",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "directed peak snapshots during a 60-token prefill, window 4: False != True",
+      "first_mismatch": "directed peak live states during a 60-token prefill, window 4: False != True",
+      "error": null
+    },
+    {
+      "mutation": "mamba_append_then_slice",
+      "what": "Mamba adds a snapshot, then replaces the list with its last window + 1",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "directed peak live states during a 60-token prefill, window 4: False != True",
       "error": null
     },
     {

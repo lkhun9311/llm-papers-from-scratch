@@ -41,6 +41,7 @@ import sys
 import time
 import traceback
 import warnings
+import weakref
 from collections import Counter
 from pathlib import Path
 
@@ -395,41 +396,46 @@ def check_zero_probability_draft() -> None:
     equal("directed", "draft of target probability 0, uniform 0: resampled token is possible", p[0, r.tokens[0]] > 0, True)
 
 
-class CountingList(list):
-    """A list that records the largest length it reaches through append."""
-
-    peak = 0
-
-    def append(self, x) -> None:
-        super().append(x)
-        self.peak = max(self.peak, len(self))
-
-
 def check_mamba_peak_history(window: int, prefill: int) -> None:
     """A long prefill keeps at most window + 1 snapshots at any time, not one per prompt token.
 
-    Measured from outside the model: the snapshot list's length at every append and at every per-token
-    Mamba step, so a model that keeps its own count wrong, or replaces the list, is still seen.
+    Measured from outside the model, by object: every MambaState is registered as it is built, and the
+    number still alive is counted at each construction and each per-token Mamba step. However the model
+    stores or replaces its snapshots, a snapshot that exists is counted. The bound is window + 1 snapshots
+    plus the model's current state.
     """
-    m = impl.MambaLM(mamba_weights(6, 12, 8, 3.0), window=window)
-    m.history = CountingList(m.history)
-    seen = [len(m.history)]
+    State = impl.hybrid.MambaState
+    refs: list[weakref.ref] = []  # MambaState is an unhashable dataclass, so no WeakSet
+
+    def live() -> int:
+        return sum(r() is not None for r in refs)
+    seen: list[int] = []
+
+    init = State.__init__
+
+    def register(self, *a, **kw) -> None:
+        init(self, *a, **kw)
+        refs.append(weakref.ref(self))
+        seen.append(live())
+
     step = impl.hybrid.mamba_forward
 
     def counted(*a, **kw):
-        seen.append(len(m.history))
+        seen.append(live())
         return step(*a, **kw)
 
+    State.__init__ = register
     impl.hybrid.mamba_forward = counted
     try:
+        m = impl.MambaLM(mamba_weights(6, 12, 8, 3.0), window=window)
         m.forward(list(torch.randint(0, 12, (prefill,), generator=gen(prefill)).tolist()))
+        seen.append(live())
     finally:
         impl.hybrid.mamba_forward = step
-    seen.append(len(m.history))
-    if isinstance(m.history, CountingList):
-        seen.append(m.history.peak)
-    equal("directed", f"steps seen during a {prefill}-token prefill", len(seen) >= prefill + 2, True)
-    equal("directed", f"peak snapshots during a {prefill}-token prefill, window {window}", max(seen) <= window + 1, True)
+        State.__init__ = init
+    equal("directed", f"states seen during a {prefill}-token prefill", len(seen) >= 2 * prefill, True)
+    equal("directed", f"peak live states during a {prefill}-token prefill, window {window}", max(seen) <= window + 2,
+          True)
 
 
 def check_bad_inputs() -> None:
@@ -588,6 +594,7 @@ MUTATIONS = {
     "loop_ignores_temperature": "the sampled generation loop runs at temperature 1 whatever it is given",
     "mamba_trim_after_call": "Mamba keeps a snapshot per token of a forward call and trims only after it",
     "mamba_append_before_trim": "Mamba adds a snapshot before trimming, so it briefly holds window + 2",
+    "mamba_append_then_slice": "Mamba adds a snapshot, then replaces the list with its last window + 1",
     "enumeration_keeps_q": "the exact round distribution accepts each draft with probability q(x), not min(p, q)",
 }
 
@@ -669,6 +676,18 @@ def apply_mutation(name: str) -> None:
                 outs.append((x + y)[0, 0] @ self.W.head.T)
                 self.history.append(self.st.snapshot())
             del self.history[: max(0, len(self.history) - (self.window + 1))]
+            return torch.stack(outs)
+
+        impl.MambaLM.forward = fwd
+    elif name == "mamba_append_then_slice":
+        def fwd(self, tokens):
+            outs = []
+            for t in tokens:
+                x = self.W.emb[torch.tensor([[t]])]
+                y = impl.hybrid.mamba_forward(self.W.mixer, x, self.st)
+                outs.append((x + y)[0, 0] @ self.W.head.T)
+                self.history.append(self.st.snapshot())
+                self.history = self.history[-(self.window + 1) :]
             return torch.stack(outs)
 
         impl.MambaLM.forward = fwd

@@ -99,7 +99,7 @@ checkpoint (§6).
 |---|---|
 | `impl.py` | `verify_greedy`, `verify_sampled`, `sample_round` (transformers' random-number order), `residual`; `round_distribution`, `outcome_distribution` (exact laws by enumeration); `AttnLM` (KV cache, rollback by truncation), `MambaLM` (02's Mamba mixer, rollback by snapshot); `speculative` and `autoregressive` loops. Float64, torch only. |
 | `oracle.py` | transformers 5.22.2: `_speculative_sampling`, a tiny Llama pair, `generate()` with and without an assistant, `DynamicCache.crop`. vLLM 0.34.0: `rejection_sample` on CPU through Triton's interpreter. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 17 bugs and requires each to be reported, after an unmutated run passes. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 18 bugs and requires each to be reported, after an unmutated run passes. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 03-speculative-decoding/check.py --out 03-speculative-decoding/results/check.json
@@ -130,7 +130,7 @@ files compared byte for byte with those revisions on GitHub.
 | rollback | Consume tokens, consume more in 1–5 calls, roll back, continue: logits and state equal a fresh model fed the kept tokens | impl attention, impl Mamba, transformers `DynamicCache` |
 | generation | Greedy speculative = greedy, and on return both models hold exactly the returned tokens but the last; sampled speculative of a 3-token vocabulary vs the target's exact law over all sequences (3,000 runs, temperatures 1.0 and 0.5), with the same end-state rule after every run | attention and Mamba targets and drafts in all four pairings, `k` ∈ {1, 2, 3, 5} |
 | inputs | `k = 0` and an empty prompt raise `ValueError` | |
-| directed | A draft of target probability 0 with a uniform of exactly 0 is rejected; a 60-token Mamba prefill never holds more than `window + 1` snapshots | |
+| directed | A draft of target probability 0 with a uniform of exactly 0 is rejected; a 60-token Mamba prefill never holds more than `window + 1` snapshots, counted as live state objects | |
 
 Tolerances: impl identities `1e-10 + 1e-9·|x|`; enumerated probabilities `1e-12 + 1e-10·|x|`. The
 statistical tests use fixed seeds, so a run is reproducible. Their limit: a cell expected only a few
@@ -148,7 +148,7 @@ approximation behind standard errors fails for such a cell). In sampled generati
 is nearly deterministic (one sequence holds over 99.9% of its law), so the Mamba targets carry most of
 that test's power.
 
-**Planted bugs** (`results/self_test.json`): all 17 are reported as mismatches, after an unmutated run
+**Planted bugs** (`results/self_test.json`): all 18 are reported as mismatches, after an unmutated run
 passes.
 
 | Mutation | First reported by |
@@ -170,6 +170,7 @@ passes.
 | sampled generation loop ignores the temperature | generation sampled (`T = 0.5`) |
 | Mamba trims snapshots only after a whole forward call | directed (peak snapshots) |
 | Mamba adds a snapshot before trimming (briefly `window + 2`) | directed (peak snapshots) |
+| Mamba adds a snapshot, then replaces the list with its last `window + 1` | directed (peak snapshots) |
 
 **Things the references do that a test has to work around.**
 

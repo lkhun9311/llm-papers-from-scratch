@@ -71,15 +71,15 @@
   "seconds_per_family": {
     "hf_sampling": 0.4,
     "theorem": 0.1,
-    "hf_assisted": 0.7,
-    "rollback": 0.1,
-    "vllm_greedy": 2.7,
+    "hf_assisted": 1.1,
+    "rollback": 0.2,
+    "vllm_greedy": 2.8,
     "vllm_rows": 0.4,
-    "vllm_sampled": 252.1,
+    "vllm_sampled": 256.5,
     "generation_greedy": 0.7,
     "inputs": 0.0,
     "directed": 0.0,
-    "generation_sampled": 18.8
+    "generation_sampled": 19.5
   },
   "max_chi_square_over_limit": {
     "generation_sampled": 0.351,
@@ -116,6 +116,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 275.9,
-  "peak_rss_mib": 538
+  "seconds": 281.7,
+  "peak_rss_mib": 534
 }
