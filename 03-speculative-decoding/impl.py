@@ -294,7 +294,6 @@ class MambaLM:
         self.W, self.window = W, window
         self.st = hybrid.mamba_new_state(W.mixer, 1)
         self.history = [self.st.snapshot()]  # history[-1 - j] = state before the last j tokens
-        self.peak_history = 1  # most snapshots held at once, for the memory check
 
     @property
     def consumed(self) -> int:
@@ -306,10 +305,9 @@ class MambaLM:
             x = self.W.emb[torch.tensor([[t]])]
             y = hybrid.mamba_forward(self.W.mixer, x, self.st)
             outs.append((x + y)[0, 0] @ self.W.head.T)
-            self.history.append(self.st.snapshot())
-            if len(self.history) > self.window + 1:  # trim per token: a long prefill holds window + 1, not all
+            if len(self.history) == self.window + 1:  # trim per token, before adding: never more than window + 1
                 del self.history[0]
-            self.peak_history = max(self.peak_history, len(self.history))
+            self.history.append(self.st.snapshot())
         return torch.stack(outs)
 
     def rollback(self, drop: int) -> None:

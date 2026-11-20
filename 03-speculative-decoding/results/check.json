@@ -46,7 +46,7 @@
     "directed": 1
   },
   "comparisons": {
-    "compare_directed": 3,
+    "compare_directed": 4,
     "compare_generation": 672,
     "compare_generation_sampled": 8,
     "compare_hf_assisted": 48,
@@ -74,11 +74,11 @@
     "rollback": 0.1,
     "vllm_greedy": 2.7,
     "vllm_rows": 0.4,
-    "vllm_sampled": 253.8,
+    "vllm_sampled": 248.9,
     "generation_greedy": 0.7,
     "inputs": 0.0,
     "directed": 0.0,
-    "generation_sampled": 18.4
+    "generation_sampled": 18.1
   },
   "max_chi_square_over_limit": {
     "generation_sampled": 0.351,
@@ -113,6 +113,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 277.3,
-  "peak_rss_mib": 537
+  "seconds": 272.1,
+  "peak_rss_mib": 540
 }

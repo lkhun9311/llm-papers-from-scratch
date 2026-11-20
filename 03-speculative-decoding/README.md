@@ -99,7 +99,7 @@ checkpoint (§6).
 |---|---|
 | `impl.py` | `verify_greedy`, `verify_sampled`, `sample_round` (transformers' random-number order), `residual`; `round_distribution`, `outcome_distribution` (exact laws by enumeration); `AttnLM` (KV cache, rollback by truncation), `MambaLM` (02's Mamba mixer, rollback by snapshot); `speculative` and `autoregressive` loops. Float64, torch only. |
 | `oracle.py` | transformers 5.22.2: `_speculative_sampling`, a tiny Llama pair, `generate()` with and without an assistant, `DynamicCache.crop`. vLLM 0.34.0: `rejection_sample` on CPU through Triton's interpreter. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 15 bugs and requires each to be reported, after an unmutated run passes. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 16 bugs and requires each to be reported, after an unmutated run passes. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 03-speculative-decoding/check.py --out 03-speculative-decoding/results/check.json
@@ -140,14 +140,14 @@ A pass also needs all 1,744 cases and minimum counts of: first draft rejected, r
 acceptances, all accepted (bonus), partial and full greedy rounds in assisted generation, Mamba
 rollbacks reaching back past the last forward call, and Mamba generation rounds.
 
-**Result** (`results/check.json`): passed. 4,905 comparisons. Largest error over tolerance:
+**Result** (`results/check.json`): passed. 4,906 comparisons. Largest error over tolerance:
 `2.3e-5`. Largest chi-square: 0.37 of its limit. Largest cell deviation: 4.9 standard errors, from a
 sequence expected 0.04 times in 3,000 sampled generations that came up once (a 4% event; the normal
 approximation behind standard errors fails for such a cell). In sampled generation the attention target
 is nearly deterministic (one sequence holds over 99.9% of its law), so the Mamba targets carry most of
 that test's power.
 
-**Planted bugs** (`results/self_test.json`): all 15 are reported as mismatches, after an unmutated run
+**Planted bugs** (`results/self_test.json`): all 16 are reported as mismatches, after an unmutated run
 passes.
 
 | Mutation | First reported by |
@@ -167,6 +167,7 @@ passes.
 | accept when `u ≤ p/q` | directed (probability-0 draft) |
 | sampled generation loop ignores the temperature | generation sampled (`T = 0.5`) |
 | Mamba trims snapshots only after a whole forward call | directed (peak snapshots) |
+| Mamba adds a snapshot before trimming (briefly `window + 2`) | directed (peak snapshots) |
 
 **Things the references do that a test has to work around.**
 
@@ -177,8 +178,9 @@ passes.
   ([#L4394](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/generation/utils.py#L4394)).
   On a finite grid of draws `≤` is not quite right: when `p(x) = 0` and the draw is exactly 0 (chance
   `2⁻⁵³` per float64 draw), transformers accepts a token the target can never emit. impl accepts when
-  `u < p(x)/q(x)`, which has probability exactly `p(x)/q(x)` for `u` on `[0, 1)` and never accepts such a
-  token (directed check). This differs from transformers only when `u` equals the ratio exactly, so the
+  `u < p(x)/q(x)`, which never accepts such a token (directed check). For a continuous `u` on `[0, 1)` it
+  accepts with probability exactly `p(x)/q(x)`; on the float64 grid of `torch.rand` (multiples of `2⁻⁵³`)
+  the chance is `p(x)/q(x)` rounded up to that grid, so off by less than `2⁻⁵³`. This differs from transformers only when `u` equals the ratio exactly, so the
   seeded comparison still matches token for token. Recorded here; not reported upstream.
 - transformers' cropping can't put back a recurrent state: `is_croppable` is false once a
   linear-attention layer holds one
@@ -202,7 +204,8 @@ accepts when `r_i <= p_i/q_i`
 ([#L4394](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/generation/utils.py#L4394)),
 and assisted generation crops the cache by `candidate_length − n_matches`
 ([#L4161](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/generation/utils.py#L4161)).
-impl matches both exactly.
+impl matches both, except for the case above: a draft of target probability 0 with a draw of exactly 0,
+which transformers accepts and impl rejects.
 
 ## 7. References
 
