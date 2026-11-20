@@ -29,6 +29,7 @@
     "vllm_sampled": 4,
     "generation_greedy": 24,
     "inputs": 1,
+    "directed": 1,
     "generation_sampled": 2
   },
   "expected_cases": {
@@ -41,9 +42,11 @@
     "vllm_sampled": 4,
     "generation_greedy": 24,
     "generation_sampled": 2,
-    "inputs": 1
+    "inputs": 1,
+    "directed": 1
   },
   "comparisons": {
+    "compare_directed": 3,
     "compare_generation": 672,
     "compare_generation_sampled": 8,
     "compare_hf_assisted": 48,
@@ -61,7 +64,7 @@
     "theorem": 3.74e-06
   },
   "max_standard_errors": {
-    "generation_sampled": 3.43,
+    "generation_sampled": 4.88,
     "vllm_sampled": 2.8
   },
   "seconds_per_family": {
@@ -69,12 +72,13 @@
     "theorem": 0.1,
     "hf_assisted": 0.7,
     "rollback": 0.1,
-    "vllm_greedy": 2.8,
+    "vllm_greedy": 2.7,
     "vllm_rows": 0.4,
-    "vllm_sampled": 257.9,
+    "vllm_sampled": 253.8,
     "generation_greedy": 0.7,
     "inputs": 0.0,
-    "generation_sampled": 17.8
+    "directed": 0.0,
+    "generation_sampled": 18.4
   },
   "max_chi_square_over_limit": {
     "generation_sampled": 0.351,
@@ -109,6 +113,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 280.9,
-  "peak_rss_mib": 536
+  "seconds": 277.3,
+  "peak_rss_mib": 537
 }

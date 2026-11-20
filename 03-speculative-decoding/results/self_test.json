@@ -90,6 +90,30 @@
       "error": null
     },
     {
+      "mutation": "accept_on_equal",
+      "what": "accept when u <= p/q, which accepts a draft of target probability 0 when u = 0",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "directed draft of target probability 0, uniform 0: accepted count: 1 != 0",
+      "error": null
+    },
+    {
+      "mutation": "loop_ignores_temperature",
+      "what": "the sampled generation loop runs at temperature 1 whatever it is given",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "generation_sampled attn<-attn V=3 k=3 L=4 T=0.5 runs=3000: a cell is 258.6 standard errors from its exact probability",
+      "error": null
+    },
+    {
+      "mutation": "mamba_trim_after_call",
+      "what": "Mamba keeps a snapshot per token of a forward call and trims only after it",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "directed peak snapshots after a 60-token prefill, window 4: False != True",
+      "error": null
+    },
+    {
       "mutation": "enumeration_keeps_q",
       "what": "the exact round distribution accepts each draft with probability q(x), not min(p, q)",
       "exit": 1,

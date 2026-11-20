@@ -384,6 +384,22 @@ def check_generation_greedy(V: int, k: int, plen: int, n_new: int, seed: int) ->
             COUNT["generation_mamba_rounds"] += len(res.rounds)
 
 
+def check_zero_probability_draft() -> None:
+    """A draft the target gives probability 0 is rejected even when the uniform is exactly 0."""
+    p = torch.tensor([[0.0, 0.5, 0.5], [0.2, 0.3, 0.5]], dtype=DT)
+    q = torch.tensor([[0.6, 0.2, 0.2]], dtype=DT)
+    r = impl.verify_sampled(p, q, torch.tensor([0]), torch.zeros(1, dtype=DT), lambda d: int(d.argmax()))
+    equal("directed", "draft of target probability 0, uniform 0: accepted count", r.accepted, 0)
+    equal("directed", "draft of target probability 0, uniform 0: resampled token is possible", p[0, r.tokens[0]] > 0, True)
+
+
+def check_mamba_peak_history(window: int, prefill: int) -> None:
+    """A long prefill keeps at most window + 1 snapshots at any time, not one per prompt token."""
+    m = impl.MambaLM(mamba_weights(6, 12, 8, 3.0), window=window)
+    m.forward(list(torch.randint(0, 12, (prefill,), generator=gen(prefill)).tolist()))
+    equal("directed", f"peak snapshots after a {prefill}-token prefill, window {window}", m.peak_history <= window + 1, True)
+
+
 def check_bad_inputs() -> None:
     """k = 0 and an empty prompt are refused, not run into an index error."""
     W = attn_weights(1, 8, 8, 2, 1, 4, 1.0)
@@ -398,20 +414,20 @@ def check_bad_inputs() -> None:
         raise Mismatch(f"inputs {what}: accepted instead of raising ValueError")
 
 
-def check_generation_sampled(V: int, k: int, L: int, runs: int, seed: int) -> None:
+def check_generation_sampled(V: int, k: int, L: int, runs: int, seed: int, temperature: float) -> None:
     """Sampled speculative decoding of L tokens vs the target's exact distribution over all V^L sequences."""
     prompt = [1]
     for name, T, Dm in makers(V, k):
         def p_fn(ctx, T=T):
-            return impl.probs(T().forward(list(ctx))[-1], 1.0)
+            return torch.softmax(T().forward(list(ctx))[-1] / temperature, -1)
 
         want = impl.target_distribution(p_fn, tuple(prompt), L)
         g = gen(seed)
         counts: Counter = Counter()
         for _ in range(runs):
-            res = impl.speculative(T(), Dm(), prompt, L, k, "sampled", 1.0, g)
+            res = impl.speculative(T(), Dm(), prompt, L, k, "sampled", temperature, g)
             counts[tuple(res.tokens[len(prompt) :])] += 1
-        frequencies("generation_sampled", f"{name} V={V} k={k} L={L} runs={runs}", counts, want, runs)
+        frequencies("generation_sampled", f"{name} V={V} k={k} L={L} T={temperature} runs={runs}", counts, want, runs)
 
 
 # ================================================================================================
@@ -440,6 +456,7 @@ EXPECTED_CASES = {
     "generation_greedy": len(GREEDY_GEN),
     "generation_sampled": 2,
     "inputs": 1,
+    "directed": 1,
 }
 ROLLBACK = [(kind, s, t, extra, drop, calls) for kind in ("attn", "mamba", "hf") for s in range(2) for t in (1, 5)
             for extra, drop, calls in ((3, 0, 1), (3, 1, 1), (3, 3, 1), (4, 2, 2), (4, 4, 4), (5, 3, 5),
@@ -500,8 +517,11 @@ def run_all(oracle) -> dict:
         cases["generation_greedy"] += 1
     check_bad_inputs()
     cases["inputs"] += 1
-    for k, L in ((2, 3), (3, 4)):
-        check_generation_sampled(3, k, L, 3000, 100 + k)
+    check_zero_probability_draft()
+    check_mamba_peak_history(4, 60)
+    cases["directed"] += 1
+    for k, L, temp in ((2, 3, 1.0), (3, 4, 0.5)):
+        check_generation_sampled(3, k, L, 3000, 100 + k, temp)
         cases["generation_sampled"] += 1
     return dict(cases)
 
@@ -518,6 +538,9 @@ MUTATIONS = {
     "mamba_rollback_no_restore": "Mamba rollback trims its snapshots but keeps the latest state",
     "draft_drop_off_by_one": "after a rejection the draft forgets k - accepted tokens instead of k - 1 - accepted",
     "temperature_ignored": "probs() ignores the temperature",
+    "accept_on_equal": "accept when u <= p/q, which accepts a draft of target probability 0 when u = 0",
+    "loop_ignores_temperature": "the sampled generation loop runs at temperature 1 whatever it is given",
+    "mamba_trim_after_call": "Mamba keeps a snapshot per token of a forward call and trims only after it",
     "enumeration_keeps_q": "the exact round distribution accepts each draft with probability q(x), not min(p, q)",
 }
 
@@ -572,6 +595,29 @@ def apply_mutation(name: str) -> None:
         impl.rollback_counts = lambda k, n: (k - n, (k - n if n < k else -1))
     elif name == "temperature_ignored":
         impl.probs = lambda logits, temperature: torch.softmax(logits, dim=-1)
+    elif name == "accept_on_equal":
+        def f(ratio, u):
+            rejected = u > ratio
+            return int(rejected.int().argmax()) if bool(rejected.any()) else ratio.shape[0]
+
+        impl.first_rejection = f
+    elif name == "loop_ignores_temperature":
+        orig = impl.speculative
+        impl.speculative = lambda t, d, prompt, n_new, k, mode, temperature=1.0, gen=None: orig(
+            t, d, prompt, n_new, k, mode, 1.0, gen)
+    elif name == "mamba_trim_after_call":
+        def fwd(self, tokens):
+            outs = []
+            for t in tokens:
+                x = self.W.emb[torch.tensor([[t]])]
+                y = impl.hybrid.mamba_forward(self.W.mixer, x, self.st)
+                outs.append((x + y)[0, 0] @ self.W.head.T)
+                self.history.append(self.st.snapshot())
+                self.peak_history = max(self.peak_history, len(self.history))
+            del self.history[: max(0, len(self.history) - (self.window + 1))]
+            return torch.stack(outs)
+
+        impl.MambaLM.forward = fwd
     elif name == "enumeration_keeps_q":
         orig_min = torch.minimum
 

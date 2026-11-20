@@ -79,7 +79,8 @@ except the newest one. A round with `n` drafts kept:
 
 An attention KV cache rolls back by truncation: the entry for token `t` depends only on tokens `≤ t`.
 An SSM state is a sum over every past token and cannot be truncated. `impl.MambaLM` keeps a snapshot
-after each of its last `k + 1` tokens and restores one.
+after each of its last `k + 1` tokens and restores one. It trims the oldest snapshot as each token
+arrives, so a long prefill holds `k + 2` snapshots at most, not one per prompt token.
 
 What a rollback has to hold, for one sequence and `k = 4`:
 
@@ -98,14 +99,14 @@ checkpoint (§6).
 |---|---|
 | `impl.py` | `verify_greedy`, `verify_sampled`, `sample_round` (transformers' random-number order), `residual`; `round_distribution`, `outcome_distribution` (exact laws by enumeration); `AttnLM` (KV cache, rollback by truncation), `MambaLM` (02's Mamba mixer, rollback by snapshot); `speculative` and `autoregressive` loops. Float64, torch only. |
 | `oracle.py` | transformers 5.22.2: `_speculative_sampling`, a tiny Llama pair, `generate()` with and without an assistant, `DynamicCache.crop`. vLLM 0.34.0: `rejection_sample` on CPU through Triton's interpreter. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 12 bugs and requires each to be reported, after an unmutated run passes. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 15 bugs and requires each to be reported, after an unmutated run passes. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 03-speculative-decoding/check.py --out 03-speculative-decoding/results/check.json
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 03-speculative-decoding/check.py --self-test --out 03-speculative-decoding/results/self_test.json
 ```
 
-The check takes about 5 minutes with a peak RSS of about 540 MiB; 258 s of that is vLLM's sampler in
+The check takes about 5 minutes with a peak RSS of about 540 MiB; 254 s of that is vLLM's sampler in
 the Triton interpreter. The check pins transformers 5.22.2 and vLLM 0.34.0 (`g62d4bc3c7`).
 
 **Running vLLM's sampler on CPU.** The sampler is Triton GPU kernels. With `TRITON_INTERPRET=1`, Triton
@@ -127,21 +128,26 @@ files compared byte for byte with those revisions on GitHub.
 | vllm sampled | `rejection_sample` over 4,000 seeds vs `impl.outcome_distribution`, the exact law of (accepted count, emitted token): every cell within 5 standard errors, nothing in a cell of probability 0, Pearson chi-square under its `1 − 10⁻⁶` quantile | temperatures 1.0, 0.7, 0.8; with draft logits and one-hot drafts |
 | theorem | One round continued by the target to `k + 1` or `k + 2` tokens equals the target's law over every sequence (enumerated) | `V` ∈ {2, 3}, `k` ∈ {1, 2, 3}; `q` random, `q = p`, `q` disjoint from `p`, `p` with a zero-probability token |
 | rollback | Consume tokens, consume more in 1–5 calls, roll back, continue: logits and state equal a fresh model fed the kept tokens | impl attention, impl Mamba, transformers `DynamicCache` |
-| generation | Greedy speculative = greedy, and on return both models hold exactly the returned tokens but the last; sampled speculative of a 3-token vocabulary vs the target's exact law over all sequences (3,000 runs) | attention and Mamba targets and drafts in all four pairings, `k` ∈ {1, 2, 3, 5} |
+| generation | Greedy speculative = greedy, and on return both models hold exactly the returned tokens but the last; sampled speculative of a 3-token vocabulary vs the target's exact law over all sequences (3,000 runs, temperatures 1.0 and 0.5) | attention and Mamba targets and drafts in all four pairings, `k` ∈ {1, 2, 3, 5} |
 | inputs | `k = 0` and an empty prompt raise `ValueError` | |
+| directed | A draft of target probability 0 with a uniform of exactly 0 is rejected; a 60-token Mamba prefill never holds more than `window + 1` snapshots | |
 
 Tolerances: impl identities `1e-10 + 1e-9·|x|`; enumerated probabilities `1e-12 + 1e-10·|x|`. The
 statistical tests use fixed seeds, so a run is reproducible. Their limit: a cell expected only a few
 times in 4,000 samples can vanish without failing either test.
 
-A pass also needs all 1,743 cases and minimum counts of: first draft rejected, rejection after some
+A pass also needs all 1,744 cases and minimum counts of: first draft rejected, rejection after some
 acceptances, all accepted (bonus), partial and full greedy rounds in assisted generation, Mamba
 rollbacks reaching back past the last forward call, and Mamba generation rounds.
 
-**Result** (`results/check.json`): passed. About 4,900 comparisons. Largest error over tolerance:
-`2.3e-5`. Largest cell deviation: 3.4 standard errors; largest chi-square: 0.37 of its limit.
+**Result** (`results/check.json`): passed. 4,905 comparisons. Largest error over tolerance:
+`2.3e-5`. Largest chi-square: 0.37 of its limit. Largest cell deviation: 4.9 standard errors, from a
+sequence expected 0.04 times in 3,000 sampled generations that came up once (a 4% event; the normal
+approximation behind standard errors fails for such a cell). In sampled generation the attention target
+is nearly deterministic (one sequence holds over 99.9% of its law), so the Mamba targets carry most of
+that test's power.
 
-**Planted bugs** (`results/self_test.json`): all 12 are reported as mismatches, after an unmutated run
+**Planted bugs** (`results/self_test.json`): all 15 are reported as mismatches, after an unmutated run
 passes.
 
 | Mutation | First reported by |
@@ -158,13 +164,22 @@ passes.
 | draft forgets `k − n` tokens instead of `k − 1 − n` | generation (draft state on return) |
 | temperature ignored | vllm sampled (17 standard errors at `T = 0.7`) |
 | exact round law accepts with `q(x)` instead of `min(p, q)` | theorem |
+| accept when `u ≤ p/q` | directed (probability-0 draft) |
+| sampled generation loop ignores the temperature | generation sampled (`T = 0.5`) |
+| Mamba trims snapshots only after a whole forward call | directed (peak snapshots) |
 
 **Things the references do that a test has to work around.**
 
 - vLLM's sampler draws its random numbers from a counter-based generator keyed by (seed, position). Its
   samples cannot be matched draw for draw, so they are compared by distribution.
-- vLLM accepts when `p(x) > u·q(x)` with `u` in `(0, 1]`; the paper and transformers accept when
-  `u ≤ p(x)/q(x)` with `u` in `[0, 1)`. The two differ only on a set of probability zero.
+- vLLM accepts when `p(x) > u·q(x)`, with `u` drawn on `[0, 1)` and raised to a small positive minimum,
+  so never 0. transformers accepts when `u ≤ p(x)/q(x)` with `u` from `torch.rand` on `[0, 1)`
+  ([#L4394](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/generation/utils.py#L4394)).
+  On a finite grid of draws `≤` is not quite right: when `p(x) = 0` and the draw is exactly 0 (chance
+  `2⁻⁵³` per float64 draw), transformers accepts a token the target can never emit. impl accepts when
+  `u < p(x)/q(x)`, which has probability exactly `p(x)/q(x)` for `u` on `[0, 1)` and never accepts such a
+  token (directed check). This differs from transformers only when `u` equals the ratio exactly, so the
+  seeded comparison still matches token for token. Recorded here; not reported upstream.
 - transformers' cropping can't put back a recurrent state: `is_croppable` is false once a
   linear-attention layer holds one
   ([`cache_utils.py#L1107`](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/cache_utils.py#L1107)).

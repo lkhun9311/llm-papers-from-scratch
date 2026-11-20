@@ -84,8 +84,13 @@ def verify_greedy(target_logits: torch.Tensor, draft: torch.Tensor) -> Round:
 
 
 def first_rejection(ratio: torch.Tensor, uniforms: torch.Tensor) -> int:
-    """Index of the first draft with uniform > ratio, or k if every draft is accepted."""
-    rejected = uniforms > ratio
+    """Index of the first rejected draft, or k if every draft is accepted.
+
+    Accept when u < ratio. With u uniform on [0, 1) that has probability exactly ratio, and a draft the
+    target gives probability 0 (ratio 0) is never accepted, even when u is exactly 0. Accepting on
+    u <= ratio, as transformers does, would accept it on that draw.
+    """
+    rejected = uniforms >= ratio
     return int(rejected.int().argmax()) if bool(rejected.any()) else ratio.shape[0]
 
 
@@ -289,6 +294,7 @@ class MambaLM:
         self.W, self.window = W, window
         self.st = hybrid.mamba_new_state(W.mixer, 1)
         self.history = [self.st.snapshot()]  # history[-1 - j] = state before the last j tokens
+        self.peak_history = 1  # most snapshots held at once, for the memory check
 
     @property
     def consumed(self) -> int:
@@ -301,7 +307,9 @@ class MambaLM:
             y = hybrid.mamba_forward(self.W.mixer, x, self.st)
             outs.append((x + y)[0, 0] @ self.W.head.T)
             self.history.append(self.st.snapshot())
-        del self.history[: max(0, len(self.history) - (self.window + 1))]
+            if len(self.history) > self.window + 1:  # trim per token: a long prefill holds window + 1, not all
+                del self.history[0]
+            self.peak_history = max(self.peak_history, len(self.history))
         return torch.stack(outs)
 
     def rollback(self, drop: int) -> None:
