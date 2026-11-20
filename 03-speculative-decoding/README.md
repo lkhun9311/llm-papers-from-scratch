@@ -99,7 +99,7 @@ checkpoint (§6).
 |---|---|
 | `impl.py` | `verify_greedy`, `verify_sampled`, `sample_round` (transformers' random-number order), `residual`; `round_distribution`, `outcome_distribution` (exact laws by enumeration); `AttnLM` (KV cache, rollback by truncation), `MambaLM` (02's Mamba mixer, rollback by snapshot); `speculative` and `autoregressive` loops. Float64, torch only. |
 | `oracle.py` | transformers 5.22.2: `_speculative_sampling`, a tiny Llama pair, `generate()` with and without an assistant, `DynamicCache.crop`. vLLM 0.34.0: `rejection_sample` on CPU through Triton's interpreter. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 16 bugs and requires each to be reported, after an unmutated run passes. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 17 bugs and requires each to be reported, after an unmutated run passes. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 03-speculative-decoding/check.py --out 03-speculative-decoding/results/check.json
@@ -128,7 +128,7 @@ files compared byte for byte with those revisions on GitHub.
 | vllm sampled | `rejection_sample` over 4,000 seeds vs `impl.outcome_distribution`, the exact law of (accepted count, emitted token): every cell within 5 standard errors, nothing in a cell of probability 0, Pearson chi-square under its `1 − 10⁻⁶` quantile | temperatures 1.0, 0.7, 0.8; with draft logits and one-hot drafts |
 | theorem | One round continued by the target to `k + 1` or `k + 2` tokens equals the target's law over every sequence (enumerated) | `V` ∈ {2, 3}, `k` ∈ {1, 2, 3}; `q` random, `q = p`, `q` disjoint from `p`, `p` with a zero-probability token |
 | rollback | Consume tokens, consume more in 1–5 calls, roll back, continue: logits and state equal a fresh model fed the kept tokens | impl attention, impl Mamba, transformers `DynamicCache` |
-| generation | Greedy speculative = greedy, and on return both models hold exactly the returned tokens but the last; sampled speculative of a 3-token vocabulary vs the target's exact law over all sequences (3,000 runs, temperatures 1.0 and 0.5) | attention and Mamba targets and drafts in all four pairings, `k` ∈ {1, 2, 3, 5} |
+| generation | Greedy speculative = greedy, and on return both models hold exactly the returned tokens but the last; sampled speculative of a 3-token vocabulary vs the target's exact law over all sequences (3,000 runs, temperatures 1.0 and 0.5), with the same end-state rule after every run | attention and Mamba targets and drafts in all four pairings, `k` ∈ {1, 2, 3, 5} |
 | inputs | `k = 0` and an empty prompt raise `ValueError` | |
 | directed | A draft of target probability 0 with a uniform of exactly 0 is rejected; a 60-token Mamba prefill never holds more than `window + 1` snapshots | |
 
@@ -138,16 +138,17 @@ times in 4,000 samples can vanish without failing either test.
 
 A pass also needs all 1,744 cases and minimum counts of: first draft rejected, rejection after some
 acceptances, all accepted (bonus), partial and full greedy rounds in assisted generation, Mamba
-rollbacks reaching back past the last forward call, and Mamba generation rounds.
+rollbacks reaching back past the last forward call, Mamba generation rounds, and sampled runs that
+emit more tokens than asked for.
 
-**Result** (`results/check.json`): passed. 4,906 comparisons. Largest error over tolerance:
-`2.3e-5`. Largest chi-square: 0.37 of its limit. Largest cell deviation: 4.9 standard errors, from a
+**Result** (`results/check.json`): passed. 57,506 comparisons, most of them the end-state rule after
+each sampled run. Largest error over tolerance: `2.3e-5`. Largest chi-square: 0.37 of its limit. Largest cell deviation: 4.9 standard errors, from a
 sequence expected 0.04 times in 3,000 sampled generations that came up once (a 4% event; the normal
 approximation behind standard errors fails for such a cell). In sampled generation the attention target
 is nearly deterministic (one sequence holds over 99.9% of its law), so the Mamba targets carry most of
 that test's power.
 
-**Planted bugs** (`results/self_test.json`): all 16 are reported as mismatches, after an unmutated run
+**Planted bugs** (`results/self_test.json`): all 17 are reported as mismatches, after an unmutated run
 passes.
 
 | Mutation | First reported by |
@@ -165,6 +166,7 @@ passes.
 | temperature ignored | vllm sampled (17 standard errors at `T = 0.7`) |
 | exact round law accepts with `q(x)` instead of `min(p, q)` | theorem |
 | accept when `u ≤ p/q` | directed (probability-0 draft) |
+| sampled generation trims the excess tokens but does not roll the models back by them | generation sampled (target state on return) |
 | sampled generation loop ignores the temperature | generation sampled (`T = 0.5`) |
 | Mamba trims snapshots only after a whole forward call | directed (peak snapshots) |
 | Mamba adds a snapshot before trimming (briefly `window + 2`) | directed (peak snapshots) |
@@ -204,8 +206,8 @@ accepts when `r_i <= p_i/q_i`
 ([#L4394](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/generation/utils.py#L4394)),
 and assisted generation crops the cache by `candidate_length − n_matches`
 ([#L4161](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/generation/utils.py#L4161)).
-impl matches both, except for the case above: a draft of target probability 0 with a draw of exactly 0,
-which transformers accepts and impl rejects.
+impl matches both, except when a draw equals `p(x)/q(x)` exactly, which transformers accepts and impl
+rejects (above). The case that matters is a draft of target probability 0 with a draw of exactly 0.
 
 ## 7. References
 

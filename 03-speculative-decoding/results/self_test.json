@@ -98,6 +98,14 @@
       "error": null
     },
     {
+      "mutation": "sampled_skips_final_rollback",
+      "what": "sampled generation trims the excess tokens but does not roll the models back by them",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "generation_sampled target consumed on return attn<-attn run=168: 4 != 3",
+      "error": null
+    },
+    {
       "mutation": "loop_ignores_temperature",
       "what": "the sampled generation loop runs at temperature 1 whatever it is given",
       "exit": 1,

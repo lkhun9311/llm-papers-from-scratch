@@ -48,7 +48,7 @@
   "comparisons": {
     "compare_directed": 4,
     "compare_generation": 672,
-    "compare_generation_sampled": 8,
+    "compare_generation_sampled": 52608,
     "compare_hf_assisted": 48,
     "compare_hf_sampling": 2880,
     "compare_inputs": 3,
@@ -60,6 +60,7 @@
   },
   "max_error_over_tolerance": {
     "generation": 4.4e-06,
+    "generation_sampled": 2.08e-07,
     "rollback": 2.33e-05,
     "theorem": 3.74e-06
   },
@@ -74,11 +75,11 @@
     "rollback": 0.1,
     "vllm_greedy": 2.7,
     "vllm_rows": 0.4,
-    "vllm_sampled": 248.9,
+    "vllm_sampled": 252.1,
     "generation_greedy": 0.7,
     "inputs": 0.0,
     "directed": 0.0,
-    "generation_sampled": 18.1
+    "generation_sampled": 18.8
   },
   "max_chi_square_over_limit": {
     "generation_sampled": 0.351,
@@ -94,6 +95,7 @@
     "assisted_full_rounds": 87,
     "rollback_mamba_multi_call": 16,
     "generation_mamba_rounds": 984,
+    "generation_sampled_excess": 8301,
     "theorem_zero_prob_tokens": 36
   },
   "min_coverage": {
@@ -106,6 +108,7 @@
     "assisted_full_rounds": 5,
     "rollback_mamba_multi_call": 10,
     "generation_mamba_rounds": 20,
+    "generation_sampled_excess": 20,
     "theorem_zero_prob_tokens": 5
   },
   "coverage_short": [],
@@ -113,6 +116,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 272.1,
-  "peak_rss_mib": 540
+  "seconds": 275.9,
+  "peak_rss_mib": 538
 }

@@ -31,6 +31,7 @@ Usage:  python check.py [--mutate NAME] [--out results/check.json]
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import math
 import platform
@@ -63,6 +64,7 @@ MIN_COVERAGE = {
     "assisted_full_rounds": 5,
     "rollback_mamba_multi_call": 10,  # a Mamba rollback spanning several forward calls
     "generation_mamba_rounds": 20,
+    "generation_sampled_excess": 20,
     "theorem_zero_prob_tokens": 5,
 }
 
@@ -454,9 +456,22 @@ def check_generation_sampled(V: int, k: int, L: int, runs: int, seed: int, tempe
         want = impl.target_distribution(p_fn, tuple(prompt), L)
         g = gen(seed)
         counts: Counter = Counter()
-        for _ in range(runs):
-            res = impl.speculative(T(), Dm(), prompt, L, k, "sampled", temperature, g)
+        for run in range(runs):
+            t, d = T(), Dm()
+            res = impl.speculative(t, d, prompt, L, k, "sampled", temperature, g)
             counts[tuple(res.tokens[len(prompt) :])] += 1
+            # The same invariant as greedy: on return each model holds every returned token but the last.
+            excess = sum(a + 1 for a in res.rounds) - L
+            if excess > 0:
+                COUNT["generation_sampled_excess"] += 1
+            for role, m, make in (("target", t, T), ("draft", d, Dm)):
+                equal("generation_sampled", f"{role} consumed on return {name} run={run}", m.consumed, len(res.tokens) - 1)
+                if run < 100 or excess > 0 and COUNT["generation_sampled_excess"] <= 400:
+                    fresh = make()
+                    fresh.forward(res.tokens[:-1])
+                    for key, v in m.state().items():
+                        close("generation_sampled", f"{role} state {key} on return {name} run={run}", v,
+                              fresh.state()[key], TOL_ID)
         frequencies("generation_sampled", f"{name} V={V} k={k} L={L} T={temperature} runs={runs}", counts, want, runs)
 
 
@@ -569,6 +584,7 @@ MUTATIONS = {
     "draft_drop_off_by_one": "after a rejection the draft forgets k - accepted tokens instead of k - 1 - accepted",
     "temperature_ignored": "probs() ignores the temperature",
     "accept_on_equal": "accept when u <= p/q, which accepts a draft of target probability 0 when u = 0",
+    "sampled_skips_final_rollback": "sampled generation trims the excess tokens but does not roll the models back by them",
     "loop_ignores_temperature": "the sampled generation loop runs at temperature 1 whatever it is given",
     "mamba_trim_after_call": "Mamba keeps a snapshot per token of a forward call and trims only after it",
     "mamba_append_before_trim": "Mamba adds a snapshot before trimming, so it briefly holds window + 2",
@@ -632,6 +648,14 @@ def apply_mutation(name: str) -> None:
             return int(rejected.int().argmax()) if bool(rejected.any()) else ratio.shape[0]
 
         impl.first_rejection = f
+    elif name == "sampled_skips_final_rollback":
+        # impl.speculative with the final rollback limited to greedy mode.
+        src = inspect.getsource(impl.speculative)
+        old = "        target.rollback(excess)\n        draft.rollback(excess)\n"
+        if src.count(old) != 1:
+            raise RuntimeError("mutation sampled_skips_final_rollback no longer matches impl.speculative")
+        src = src.replace(old, "        if mode == \"greedy\":\n            target.rollback(excess)\n            draft.rollback(excess)\n")
+        exec(compile(src, impl.__file__, "exec"), impl.__dict__)
     elif name == "loop_ignores_temperature":
         orig = impl.speculative
         impl.speculative = lambda t, d, prompt, n_new, k, mode, temperature=1.0, gen=None: orig(
