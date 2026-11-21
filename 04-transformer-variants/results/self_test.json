@@ -1,0 +1,198 @@
+{
+  "check": "04 self-test: every planted bug must be reported as a mismatch",
+  "mutations": [
+    {
+      "mutation": "neox_rotation_sign",
+      "what": "neox rotation uses the wrong sign on the second half",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rope_apply vs transformers Llama seed=0 d=8 kind=default style=neox: max abs diff 5.382e+00 exceeds atol=1e-12 rtol=1e-12",
+      "error": null
+    },
+    {
+      "mutation": "gptj_pairs_as_neox",
+      "what": "gptj rotation pairs (i, i + d/2) instead of adjacent dimensions",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rope_apply vs transformers DeepSeek-V2 seed=6 d=16 kind=yarn style=gptj: max abs diff 5.379e+00 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "inv_freq_exponent",
+      "what": "theta_i = base^(-i/d) instead of base^(-2i/d)",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rope_freq default d8 inv_freq vs transformers: max abs diff 2.162e-01 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "llama3_no_blend",
+      "what": "Llama 3.1 divides the blended band by the full factor",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rope_freq llama3 small inv_freq vs transformers: max abs diff 2.660e-03 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "yarn_ramp_inverted",
+      "what": "YaRN interpolates the fast dimensions and keeps the slow ones",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rope_freq yarn small inv_freq vs transformers: max abs diff 7.500e-01 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "yarn_no_attention_factor",
+      "what": "YaRN leaves cos and sin unscaled",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rope_freq yarn no mscale cos/sin factor vs transformers: max abs diff 2.079e-01 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "decode_position_reset",
+      "what": "each forward call starts its positions at 0",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "model_decode llama Hq=4 Hkv=4 rope=default chunks=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] absorbed=False: chunked = one-shot: max abs diff 5.950e+00 exceeds atol=1e-10 rtol=1e-09",
+      "error": null
+    },
+    {
+      "mutation": "kv_head_modulo",
+      "what": "query head h reads key/value head h mod Hkv instead of h // group",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "gqa_identity GQA = MHA with each key/value head repeated over its group seed=1 Hq=4 Hkv=2: max abs diff 1.889e+00 exceeds atol=1e-10 rtol=1e-09",
+      "error": null
+    },
+    {
+      "mutation": "causal_off_by_one",
+      "what": "a token cannot attend to itself",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "model_hf llama Hq=4 Hkv=4 rope=default logits: max abs diff 5.210e+00 exceeds atol=1e-05 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "pool_first_head",
+      "what": "MHA-to-GQA conversion keeps the first head of each group instead of the mean",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "gqa_identity pooled key weights are group means seed=1 Hq=4 Hkv=2: max abs diff 3.915e-01 exceeds atol=1e-10 rtol=1e-09",
+      "error": null
+    },
+    {
+      "mutation": "pool_values_first_head",
+      "what": "MHA-to-GQA conversion mean-pools keys but keeps the first value head",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "gqa_identity pooled value weights are group means seed=1 Hq=4 Hkv=2: max abs diff 3.732e-01 exceeds atol=1e-10 rtol=1e-09",
+      "error": null
+    },
+    {
+      "mutation": "expert_load_one_expert",
+      "what": "expert_load puts every assignment on expert 0",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "moe_identity tokens per expert seed=0 E=8 k=2: [64, 0, 0, 0, 0, 0, 0, 0] != [8, 13, 9, 5, 7, 10, 11, 1]",
+      "error": null
+    },
+    {
+      "mutation": "cache_count_unchecked",
+      "what": "the model runs with fewer caches than layers, skipping the rest",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "inputs one cache for two layers: accepted instead of raising ValueError",
+      "error": null
+    },
+    {
+      "mutation": "route_no_renormalize",
+      "what": "Mixtral routing does not renormalize the top-k weights",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "routing renormalized weights vs transformers Mixtral seed=0 E=8 k=1: max abs diff 7.740e-01 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "route_logits_as_weights",
+      "what": "gate weights are the raw logits of the chosen experts",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "routing renormalized weights vs transformers Mixtral seed=0 E=8 k=1: max abs diff 5.516e+00 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "group_score_sum",
+      "what": "group-limited routing ranks groups by their summed scores",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "routing group-limited experts vs transformers DeepSeek-V2 seed=0 E=8 k=1 groups=2 keep=1 scaling=1.0: [[7], [0], [1], [5], [4], [3], [0], [6], [6], [2], [6], [6], [7], [6], [1], [0], [0], [0], [4], [6], [5], [2], [0], [0], [1], [3], [0], [6], [0], [0], [3], [6], [2], [1], [0], [3], [3], [4], [1], [0], [7], [0], [6], [1], [6], [0], [6], [2], [7], [4], [6], [6], [3], [6], [3], [5], [0], [6], [7], [2], [4], [0], [0], [1]] != [[7], [0], [1], [5], [2], [3], [0], [6], [6], [2], [6], [6], [7], [6], [1], [0], [0], [0], [4], [6], [5], [2], [4], [0], [1], [3], [0], [6], [0], [0], [3], [6], [2], [1], [0], [3], [3], [4], [1], [6], [7], [7], [6], [1], [6], [0], [6], [2], [2], [3], [6], [6], [3], [6], [3], [5], [0], [6], [7], [6], [4], [0], [0], [1]]",
+      "error": null
+    },
+    {
+      "mutation": "group_limit_ignored",
+      "what": "group-limited routing ignores the groups",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "routing group-limited experts vs transformers DeepSeek-V2 seed=1 E=8 k=2 groups=2 keep=1 scaling=1.0: [[0, 6], [3, 7], [2, 4], [4, 6], [5, 7], [1, 4], [5, 7], [0, 4], [0, 2], [2, 4], [1, 3], [4, 7], [6, 7], [5, 7], [6, 7], [0, 1], [2, 3], [2, 5], [1, 4], [0, 6], [5, 6], [3, 5], [1, 4], [0, 7], [0, 6], [4, 6], [1, 5], [6, 7], [0, 6], [1, 4], [3, 5], [2, 6], [3, 7], [5, 7], [3, 5], [0, 1], [2, 6], [2, 4], [5, 6], [4, 7], [0, 7], [3, 5], [2, 3], [4, 6], [4, 6], [4, 6], [1, 5], [3, 4], [4, 7], [2, 6], [2, 3], [3, 5], [2, 3], [1, 4], [0, 6], [2, 4], [1, 2], [0, 7], [3, 7], [5, 7], [5, 6], [0, 4], [2, 3], [2, 6]] != [[0, 3], [0, 3], [1, 2], [4, 6], [5, 7], [4, 6], [5, 7], [0, 1], [0, 2], [4, 6], [1, 3], [4, 7], [6, 7], [5, 7], [6, 7], [0, 1], [2, 3], [5, 7], [4, 6], [4, 6], [5, 6], [4, 5], [1, 3], [6, 7], [0, 2], [4, 6], [5, 6], [6, 7], [4, 6], [4, 7], [2, 3], [5, 6], [0, 3], [5, 7], [5, 7], [0, 1], [5, 6], [1, 2], [5, 6], [4, 7], [0, 2], [5, 6], [2, 3], [4, 6], [4, 6], [4, 6], [1, 3], [4, 7], [4, 7], [0, 2], [2, 3], [1, 3], [2, 3], [4, 5], [0, 2], [4, 6], [1, 2], [5, 7], [4, 7], [5, 7], [5, 6], [4, 7], [2, 3], [5, 6]]",
+      "error": null
+    },
+    {
+      "mutation": "routed_scaling_dropped",
+      "what": "routed_scaling_factor is not applied",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "routing group-limited weights vs transformers DeepSeek-V2 seed=0 E=8 k=1 groups=2 keep=1 scaling=16.0: max abs diff 1.482e+01 exceeds atol=1e-06 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "shared_expert_dropped",
+      "what": "DeepSeek-V2's shared experts are left out",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "moe_identity sparse MoE = dense weighted sum seed=0 E=8 k=2 shared=True: max abs diff 4.461e+00 exceeds atol=1e-10 rtol=1e-09",
+      "error": null
+    },
+    {
+      "mutation": "latent_cached_before_norm",
+      "what": "MLA caches the latent before its RMSNorm",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "model_hf deepseek q_lora=16 group_limited_greedy rope=default logits: max abs diff 2.831e+00 exceeds atol=1e-05 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "mla_scale_no_mscale",
+      "what": "MLA's softmax scale ignores YaRN's mscale",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "model_hf deepseek q_lora=16 greedy rope=yarn logits: max abs diff 1.997e+00 exceeds atol=1e-05 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "absorbed_drops_rope_score",
+      "what": "absorbed MLA scores only the latent part, not the shared rotary key",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "model_decode deepseek q_lora=16 group_limited_greedy rope=default chunks=[48] absorbed=True: chunked = one-shot: max abs diff 2.977e+00 exceeds atol=1e-10 rtol=1e-09",
+      "error": null
+    },
+    {
+      "mutation": "kv_b_split_order",
+      "what": "kv_b_proj split as W_UV rows then W_UK rows",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "model_hf deepseek q_lora=16 group_limited_greedy rope=default logits: max abs diff 5.559e+00 exceeds atol=1e-05 rtol=1e-05",
+      "error": null
+    },
+    {
+      "mutation": "kv_formula_keys_only",
+      "what": "the KV-size formula counts keys but not values",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "kv_size GQA cache elements seed=0 Hq=4 Hkv=4: 768 != 384",
+      "error": null
+    }
+  ],
+  "passed": true
+}

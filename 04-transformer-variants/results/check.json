@@ -1,0 +1,129 @@
+{
+  "check": "04-transformer-variants vs transformers (Llama, Mixtral, DeepSeek-V2; RoPE init and apply; routers) and vLLM (rotary classes, CPU routers)",
+  "transformers": "5.22.2",
+  "vllm": "0.34.0 (g62d4bc3c7)",
+  "torch": "2.14.0+cpu",
+  "python": "3.12.15",
+  "mutation": null,
+  "tolerances": {
+    "impl_identity": {
+      "atol": 1e-10,
+      "rtol": 1e-09
+    },
+    "float64_reference": {
+      "atol": 1e-12,
+      "rtol": 1e-12
+    },
+    "float32_reference": {
+      "atol": 1e-06,
+      "rtol": 1e-05
+    },
+    "transformers_model": {
+      "atol": 1e-05,
+      "rtol": 1e-05
+    }
+  },
+  "cases": {
+    "rope_freq": 9,
+    "rope_apply": 9,
+    "rope_identity": 27,
+    "routing": 7,
+    "moe_identity": 3,
+    "gqa_identity": 6,
+    "model": 13,
+    "kv_table": 1,
+    "inputs": 1
+  },
+  "expected_cases": {
+    "rope_freq": 9,
+    "rope_apply": 9,
+    "rope_identity": 27,
+    "routing": 7,
+    "moe_identity": 3,
+    "gqa_identity": 6,
+    "model": 13,
+    "kv_table": 1,
+    "inputs": 1
+  },
+  "comparisons": {
+    "compare_gqa_identity": 24,
+    "compare_inputs": 4,
+    "compare_kv_size": 129,
+    "compare_model_decode": 120,
+    "compare_model_hf": 81,
+    "compare_moe_identity": 120,
+    "compare_rope_apply": 18,
+    "compare_rope_freq": 36,
+    "compare_rope_identity": 81,
+    "compare_routing": 668
+  },
+  "max_error_over_tolerance": {
+    "gqa_identity": 4.13e-06,
+    "model_decode": 0.179,
+    "model_hf": 0.15,
+    "moe_identity": 3.58e-06,
+    "rope_apply": 0.0722,
+    "rope_freq": 0.00544,
+    "rope_identity": 0.000211,
+    "routing": 0.14
+  },
+  "min_router_score_gap": {
+    "routing": 3.04e-05
+  },
+  "seconds_per_family": {
+    "rope_freq": 0.1,
+    "rope_apply": 0.0,
+    "rope_identity": 0.0,
+    "routing": 0.1,
+    "moe_identity": 0.0,
+    "gqa_identity": 0.0,
+    "model": 0.7,
+    "kv_table": 0.0,
+    "inputs": 0.0
+  },
+  "kv_per_token": {
+    "Llama 3 8B (GQA)": {
+      "elements_per_token": 65536,
+      "kib_per_token_bf16": 128.0
+    },
+    "Llama 3 8B if it were MHA": {
+      "elements_per_token": 262144,
+      "kib_per_token_bf16": 512.0
+    },
+    "Mixtral 8x7B (GQA)": {
+      "elements_per_token": 65536,
+      "kib_per_token_bf16": 128.0
+    },
+    "DeepSeek-V2 (MLA)": {
+      "elements_per_token": 34560,
+      "kib_per_token_bf16": 67.5
+    },
+    "DeepSeek-V2 if it were MHA": {
+      "elements_per_token": 1966080,
+      "kib_per_token_bf16": 3840.0
+    }
+  },
+  "coverage": {
+    "llama3_blend_dims": 11,
+    "yarn_partial_ramp_dims": 20,
+    "group_limit_changed_choice": 1491,
+    "router_tokens": 448,
+    "experts_checked_directly": 68,
+    "decode_single_token_steps": 850
+  },
+  "min_coverage": {
+    "llama3_blend_dims": 1,
+    "yarn_partial_ramp_dims": 1,
+    "group_limit_changed_choice": 10,
+    "router_tokens": 400,
+    "experts_checked_directly": 68,
+    "decode_single_token_steps": 50
+  },
+  "coverage_short": [],
+  "cases_missing": {},
+  "first_mismatch": null,
+  "error": null,
+  "passed": true,
+  "seconds": 0.8,
+  "peak_rss_mib": 718
+}
