@@ -146,6 +146,14 @@
       "error": null
     },
     {
+      "mutation": "group_mask_zero",
+      "what": "group-limited routing masks excluded experts with 0 instead of -inf",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "moe_identity group-limited choice stays in the kept groups logit 1000 on expert 0, 2 groups, keep 1, k 2: False != True",
+      "error": null
+    },
+    {
       "mutation": "routed_scaling_dropped",
       "what": "routed_scaling_factor is not applied",
       "exit": 1,

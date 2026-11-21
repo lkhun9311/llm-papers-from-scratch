@@ -236,7 +236,7 @@ def check_routing(oracle, seed: int, E: int, k: int, T: int = 64, H: int = 16) -
     equal("routing", f"plain experts vs transformers DeepSeek-V2 greedy {tag}", ids0.tolist(), rids.tolist())
     close("routing", f"plain weights vs transformers DeepSeek-V2 greedy {tag}", w0, rw, TOL_F32)
 
-    for n_group in (g_ for g_ in (2, 4, 8) if E % g_ == 0 and g_ < E):
+    for n_group in (g_ for g_ in range(2, E) if E % g_ == 0):  # every split into equal groups
         for topk_group in range(1, n_group):
             if topk_group * (E // n_group) < k:
                 continue
@@ -258,6 +258,36 @@ def check_routing(oracle, seed: int, E: int, k: int, T: int = 64, H: int = 16) -
                 close("routing", f"group-limited renormalized weights vs vLLM {t2}", nw, rw, TOL_F32)
                 COUNT["group_limit_changed_choice"] += int((gids != ids0).any(dim=-1).sum()) if scaling == 1.0 else 0
                 check_group_limit(x, r, gids, t2)
+
+
+def check_group_underflow(oracle) -> None:
+    """Scores that underflow to 0 must still not pull in an expert outside the kept groups.
+
+    Two groups of two experts, one group kept, k = 2, and one logit of 1000: softmax scores are one 1 and
+    three exact zeros, so the second expert is chosen among ties.
+    The large logit sits on the first expert and then on the last, so whichever way top-k breaks ties, an
+    expert outside the kept group is among the tied candidates once.
+    vLLM masks with -inf and must agree.
+    transformers masks with 0; its choice is recorded, not required.
+    """
+    H = 4
+    x = torch.eye(H, dtype=DT)[:1]  # one token whose logits are the router's first column
+    for big in (0, 3):
+        W = torch.zeros(4, H, dtype=DT)
+        W[big, 0] = 1000.0
+        r = impl.Router(W, 2, False, 1.0, 2, 1)
+        w, ids = impl.route(r, x)
+        tag = f"logit 1000 on expert {big}, 2 groups, keep 1, k 2"
+        check_group_limit(x, r, ids, tag)
+        _, vids = by_id(*oracle.vllm_grouped_topk(x @ W.T, 2, False, 2, 1, 1.0))
+        equal("moe_identity", f"underflow {tag}: experts vs vLLM _grouped_topk", by_id(w, ids)[1].tolist(),
+              vids.tolist())
+        _, hids = by_id(*oracle.hf_deepseek_route(W, 2, x, "group_limited_greedy", 2, 1, 1.0))
+        UNDERFLOW[f"expert {big} large"] = {"impl": by_id(w, ids)[1].tolist()[0], "vllm": vids.tolist()[0],
+                                            "transformers": hids.tolist()[0]}
+
+
+UNDERFLOW: dict = {}
 
 
 def check_group_limit(x: torch.Tensor, r: impl.Router, ids: torch.Tensor, tag: str) -> None:
@@ -489,6 +519,7 @@ EXPECTED_CASES = {
     "model": len(LLAMA) + len(MIXTRAL) + len(DEEPSEEK),
     "kv_table": 1,
     "inputs": 1,
+    "underflow": 1,
 }
 
 
@@ -531,6 +562,8 @@ def run_all(oracle) -> tuple[dict, dict]:
     done("kv_table")
     check_bad_inputs()
     done("inputs")
+    check_group_underflow(oracle)
+    done("underflow")
     return dict(cases), table
 
 
@@ -553,6 +586,7 @@ MUTATIONS = {
     "route_logits_as_weights": "gate weights are the raw logits of the chosen experts",
     "group_score_sum": "group-limited routing ranks groups by their summed scores",
     "group_limit_ignored": "group-limited routing ignores the groups",
+    "group_mask_zero": "group-limited routing masks excluded experts with 0 instead of -inf",
     "routed_scaling_dropped": "routed_scaling_factor is not applied",
     "shared_expert_dropped": "DeepSeek-V2's shared experts are left out",
     "latent_cached_before_norm": "MLA caches the latent before its RMSNorm",
@@ -664,13 +698,15 @@ def apply_mutation(name: str) -> None:
                 best = scores.view(-1, r.n_group, E // r.n_group).sum(dim=-1)
                 keep = torch.zeros_like(best, dtype=torch.bool)
                 keep.scatter_(1, best.topk(r.topk_group, dim=-1).indices, True)
-                scores = scores.masked_fill(~keep.repeat_interleave(E // r.n_group, dim=1), 0.0)
+                scores = scores.masked_fill(~keep.repeat_interleave(E // r.n_group, dim=1), float("-inf"))
             w, ids = scores.topk(r.top_k, dim=-1)
             if r.renormalize:
                 w = w / w.sum(dim=-1, keepdim=True)
             return w * r.scaling, ids
 
         impl.route = f
+    elif name == "group_mask_zero":
+        swap_source(impl.route, 'float("-inf"))', "0.0)")
     elif name == "shared_expert_dropped":
         orig = impl.moe_forward
         impl.moe_forward = lambda m, x: orig(impl.MoE(m.router, m.experts, None), x)
@@ -772,6 +808,7 @@ def main() -> int:
         "min_router_score_gap": {k: float(f"{v:.3g}") for k, v in MIN_GAP.items()},
         "seconds_per_family": {k: round(v, 1) for k, v in SECONDS.items()},
         "kv_per_token": table,
+        "group_underflow_transformers_choice": UNDERFLOW,
         "coverage": coverage,
         "min_coverage": MIN_COVERAGE,
         "coverage_short": short,

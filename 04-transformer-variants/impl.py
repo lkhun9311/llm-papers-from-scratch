@@ -238,7 +238,8 @@ def route(r: Router, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         best = scores.view(-1, r.n_group, E // r.n_group).amax(dim=-1)  # [T, n_group]
         keep = torch.zeros_like(best, dtype=torch.bool)
         keep.scatter_(1, best.topk(r.topk_group, dim=-1).indices, True)
-        scores = scores.masked_fill(~keep.repeat_interleave(E // r.n_group, dim=1), 0.0)
+        # -inf, not 0: a softmax that underflows to 0 must not let an expert outside the kept groups tie in.
+        scores = scores.masked_fill(~keep.repeat_interleave(E // r.n_group, dim=1), float("-inf"))
     weights, ids = scores.topk(r.top_k, dim=-1)
     if r.renormalize:
         weights = weights / weights.sum(dim=-1, keepdim=True)

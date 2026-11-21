@@ -164,7 +164,7 @@ the same logits and the same cache.
 |---|---|
 | `impl.py` | RoPE (`rope_inv_freq` for default, Llama 3.1 and YaRN; `apply_rope` in both styles); `gqa_forward` with `KVCache`, `mha_to_gqa`; `route` (Mixtral and DeepSeek-V2 routing), `moe_forward`; `mla_forward` and `mla_forward_absorbed` with `LatentCache`; `kv_elements_per_token`; a decoder (`Model`, `model_forward`) mixing them. Float64, torch only. |
 | `oracle.py` | Small transformers Llama, Mixtral and DeepSeek-V2 models (eager attention, eager experts, float64) with their weights copied into impl; transformers' and vLLM's RoPE and router functions. Pins transformers 5.22.2 and vLLM 0.34.0. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 25 bugs and requires each to be reported, after an unmutated run passes. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 26 bugs and requires each to be reported, after an unmutated run passes. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 04-transformer-variants/check.py --out 04-transformer-variants/results/check.json
@@ -183,12 +183,13 @@ it importing vLLM).
 | rope freq | impl's frequencies and cos/sin factor vs transformers' RoPE init and vLLM's rotary classes | default (`d` 8, 64, 128), Llama 3.1 (small, the real 8B setting, another factor), YaRN (small, DeepSeek-V2's, without mscale, `mscale` without `mscale_all_dim`: vLLM checked against its own rule there) |
 | rope apply | `impl.apply_rope` vs transformers' Llama `apply_rotary_pos_emb` and vLLM's `forward_static`, both given impl's cos and sin; vs DeepSeek-V2's `apply_rotary_emb` | the same 10 settings, 24 positions up to 3× the trained context, 3 heads |
 | rope identity | score depends only on distance; norms kept (times the cos/sin factor); gptj = neox under the permutation | 10 settings × 3 seeds |
-| routing | `impl.route` vs transformers' Mixtral and DeepSeek-V2 routers and vLLM's `_softmax_topk` and `_grouped_topk`: same experts per token, same gate weights | `E` ∈ {6, 8, 16, 32, 64}, `k` 1–8, 64 tokens; every valid group split with 1 … `n_group − 1` kept groups, scaling 1 and 16, renormalized or not |
+| routing | `impl.route` vs transformers' Mixtral and DeepSeek-V2 routers and vLLM's `_softmax_topk` and `_grouped_topk`: same experts per token, same gate weights | `E` ∈ {6, 8, 16, 32, 64}, `k` 1–8, 64 tokens; every split into equal groups with 1 … `n_group − 1` kept groups, scaling 1 and 16, renormalized or not |
 | moe identity | softmax-top-k-renormalize = softmax over the top-k logits; sparse MoE = dense weighted sum (with shared experts); tokens per expert; group-limited choices stay inside the kept groups | 3 router shapes |
 | gqa identity | GQA = MHA with key/value heads repeated per group; mean-pooling heads that agree within a group changes nothing; pooled key and value weights are group means | `(H_q, H_kv)` ∈ (4,4), (4,2), (4,1), (8,2), (6,3), (12,4) |
 | model hf | impl's decoder vs transformers' whole model, logits of 48 tokens; and every routed expert alone vs transformers' experts module | Llama: MHA, GQA, MQA, default and Llama 3.1 RoPE; Mixtral: (8, 2), (4, 1), (6, 3); DeepSeek-V2: with and without the query low-rank path, greedy and group-limited routing, default RoPE and YaRN |
 | model decode | the same 48 tokens in one shot, one at a time, `[5, 1, 1, 41]` and `[17, 31]`: impl chunked = impl one-shot; MLA absorbed = naive; transformers through `DynamicCache` = impl | all 13 models |
 | kv size | cache elements of impl and of transformers' `DynamicCache` = `kv_elements_per_token`; the real-model numbers above; MLA = GQA with 2.25 groups | |
+| underflow | logits with one value of 1000, so the other softmax scores are exactly 0: the second expert must still come from the kept group, as in vLLM | the large logit on the first expert, then on the last |
 | inputs | too few caches for the layers, pooling a non-MHA layer, groups that do not split the experts, kept groups smaller than `k`: all raise `ValueError` | |
 
 Tolerances: impl identities `1e-10 + 1e-9·|x|`; a float64 reference given impl's cos and sin
@@ -199,15 +200,15 @@ transformers models `1e-5 + 1e-5·|x|`, because their RMSNorm and RoPE run in fl
 model. A bug that moves logits by less than that would pass the model comparison; the float64 checks of
 each piece (RoPE apply, decode, absorbed MLA, GQA, MoE) are there to catch it piece by piece.
 
-A pass also needs all 81 cases and minimum counts of: Llama 3.1 dimensions in the blended band, YaRN
+A pass also needs all 82 cases and minimum counts of: Llama 3.1 dimensions in the blended band, YaRN
 dimensions on the ramp, the YaRN setting where transformers and vLLM disagree, tokens whose experts change because of the group limit, routed tokens, experts
 checked one by one (all 68), and single-token decode steps.
 
-**Result** (`results/check.json`): passed. 1,296 comparisons. Largest error over tolerance: `0.18`
-(decode against transformers). The closest pair of expert scores across the routing tests was `3.0e-5`
+**Result** (`results/check.json`): passed. 2,098 comparisons. Largest error over tolerance: `0.32`
+(RoPE frequencies against the float32 libraries, relative `1e-6`). The closest pair of expert scores across the routing tests was `3.0e-5`
 apart, so the float32 routers' choices are not decided by rounding.
 
-**Planted bugs** (`results/self_test.json`): all 25 are reported as mismatches, after an unmutated run
+**Planted bugs** (`results/self_test.json`): all 26 are reported as mismatches, after an unmutated run
 passes.
 
 | Mutation | First reported by |
@@ -230,6 +231,7 @@ passes.
 | gate weights are raw logits | routing (transformers) |
 | groups ranked by summed instead of best score | routing (transformers) |
 | group limit ignored | routing (transformers) |
+| excluded experts masked with 0 instead of `−∞` | underflow |
 | `routed_scaling_factor` not applied | routing (transformers) |
 | shared experts left out | moe identity |
 | MLA caches the latent before its RMSNorm | model hf |
@@ -249,6 +251,13 @@ passes.
   renormalized whatever the config says
   ([`modular_deepseek_v2.py#L166`](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/models/deepseek_v2/modular_deepseek_v2.py#L166)).
   DeepSeek-V2 sets it to false, so this matches the model. Recorded here; not reported upstream.
+- `DeepseekV2TopkRouter` masks experts outside the kept groups with 0, not `−∞`
+  ([`modeling_deepseek_v2.py#L113`](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/models/deepseek_v2/modeling_deepseek_v2.py#L113)).
+  When the other scores underflow to exactly 0 (its softmax runs in float32, so a logit gap above about
+  104), top-k picks among tied zeros and can take an expert from a group that was not kept: with the
+  large logit on expert 0, it chose experts 0 and 2 where the group limit allows 0 and 1
+  (`group_underflow_transformers_choice` in `results/check.json`). vLLM masks with `−∞`; impl does the
+  same. Recorded here; not reported upstream.
 
 ## 6. In the engines
 

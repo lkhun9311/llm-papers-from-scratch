@@ -32,7 +32,8 @@
     "gqa_identity": 6,
     "model": 13,
     "kv_table": 1,
-    "inputs": 1
+    "inputs": 1,
+    "underflow": 1
   },
   "expected_cases": {
     "rope_freq": 10,
@@ -43,7 +44,8 @@
     "gqa_identity": 6,
     "model": 13,
     "kv_table": 1,
-    "inputs": 1
+    "inputs": 1,
+    "underflow": 1
   },
   "comparisons": {
     "compare_gqa_identity": 24,
@@ -51,11 +53,11 @@
     "compare_kv_size": 129,
     "compare_model_decode": 120,
     "compare_model_hf": 81,
-    "compare_moe_identity": 120,
+    "compare_moe_identity": 238,
     "compare_rope_apply": 20,
     "compare_rope_freq": 40,
     "compare_rope_identity": 90,
-    "compare_routing": 668
+    "compare_routing": 1352
   },
   "max_error_over_tolerance": {
     "gqa_identity": 4.13e-06,
@@ -71,15 +73,16 @@
     "routing": 3.04e-05
   },
   "seconds_per_family": {
-    "rope_freq": 0.2,
+    "rope_freq": 0.1,
     "rope_apply": 0.0,
     "rope_identity": 0.0,
-    "routing": 0.1,
+    "routing": 0.2,
     "moe_identity": 0.0,
     "gqa_identity": 0.0,
-    "model": 0.6,
+    "model": 0.8,
     "kv_table": 0.0,
-    "inputs": 0.0
+    "inputs": 0.0,
+    "underflow": 0.0
   },
   "kv_per_token": {
     "Llama 3 8B (GQA)": {
@@ -107,11 +110,41 @@
       "kib_per_token_bf16": 4800.0
     }
   },
+  "group_underflow_transformers_choice": {
+    "expert 0 large": {
+      "impl": [
+        0,
+        1
+      ],
+      "vllm": [
+        0,
+        1
+      ],
+      "transformers": [
+        0,
+        2
+      ]
+    },
+    "expert 3 large": {
+      "impl": [
+        2,
+        3
+      ],
+      "vllm": [
+        2,
+        3
+      ],
+      "transformers": [
+        2,
+        3
+      ]
+    }
+  },
   "coverage": {
     "llama3_blend_dims": 11,
     "yarn_libraries_disagree": 1,
     "yarn_partial_ramp_dims": 32,
-    "group_limit_changed_choice": 1491,
+    "group_limit_changed_choice": 2117,
     "router_tokens": 448,
     "experts_checked_directly": 68,
     "decode_single_token_steps": 850
@@ -130,6 +163,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 0.9,
-  "peak_rss_mib": 792
+  "seconds": 1.1,
+  "peak_rss_mib": 797
 }
