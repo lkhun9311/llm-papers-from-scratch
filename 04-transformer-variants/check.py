@@ -54,11 +54,13 @@ import impl  # noqa: E402
 DT = torch.float64
 TOL_ID = (1e-10, 1e-9)  # float64 identities
 TOL_EXACT64 = (1e-12, 1e-12)  # the same float64 formula written by someone else
-TOL_F32 = (1e-6, 1e-5)  # a reference that computes in float32 (frequencies, gate weights)
+TOL_F32 = (1e-6, 1e-5)  # a reference that computes in float32 (gate weights, DeepSeek-V2's RoPE apply)
+TOL_FREQ = (0.0, 1e-6)  # RoPE frequencies span 1 to 1e-7: relative only, or a zeroed slow frequency would pass
 TOL_HF = (1e-5, 1e-5)  # whole transformers models: their RMSNorm and RoPE run in float32
 
 MIN_COVERAGE = {
-    "llama3_blend_dims": 1,  # Llama 3.1 frequencies in the blended band, not only kept or divided ones
+    "llama3_blend_dims": 1,
+    "yarn_libraries_disagree": 1,  # the mscale-without-mscale_all_dim setting, where vLLM and transformers differ  # Llama 3.1 frequencies in the blended band, not only kept or divided ones
     "yarn_partial_ramp_dims": 1,  # YaRN frequencies strictly between kept and interpolated
     "group_limit_changed_choice": 10,  # tokens whose experts differ from plain top-k because of the group limit
     "router_tokens": 400,
@@ -122,15 +124,29 @@ ROPES = [
     ("yarn small", SMALL_YARN),
     ("yarn DeepSeek-V2", DSV2),
     ("yarn no mscale", impl.Rope(32, 10000.0, style="gptj", kind="yarn", factor=8.0, orig_max=2048)),
+    ("yarn mscale without mscale_all_dim", impl.Rope(64, 10000.0, style="gptj", kind="yarn", factor=40.0,
+                                                    orig_max=4096, mscale=0.707)),
 ]
 
 
 def check_rope_freq(oracle, name: str, r: impl.Rope) -> None:
     inv, factor = impl.rope_inv_freq(r)
-    for ref_name, ref in (("transformers", oracle.hf_inv_freq(r)), ("vLLM", oracle.vllm_inv_freq(r))):
-        close("rope_freq", f"{name} inv_freq vs {ref_name}", inv, ref[0], TOL_F32)
-        close("rope_freq", f"{name} cos/sin factor vs {ref_name}", torch.tensor(factor), torch.tensor(float(ref[1])),
-              TOL_F32)
+    hf, vl = oracle.hf_inv_freq(r), oracle.vllm_inv_freq(r)
+    for ref_name, ref in (("transformers", hf), ("vLLM", vl)):
+        close("rope_freq", f"{name} inv_freq vs {ref_name}", inv, ref[0], TOL_FREQ)
+    close("rope_freq", f"{name} cos/sin factor vs transformers", torch.tensor(factor), torch.tensor(float(hf[1])),
+          TOL_FREQ)
+    if r.kind == "yarn":
+        # vLLM always uses mscale(s, mscale) / mscale(s, mscale_all_dim).
+        # transformers uses that ratio only when both are set, and mscale(s, 1) otherwise.
+        # impl follows transformers.
+        # So vLLM is checked against its own rule, and the settings where the two disagree are counted.
+        ratio = impl.yarn_mscale(r.factor, r.mscale) / impl.yarn_mscale(r.factor, r.mscale_all_dim)
+        close("rope_freq", f"{name} cos/sin factor vs vLLM's rule", torch.tensor(float(vl[1])), torch.tensor(ratio),
+              TOL_FREQ)
+        COUNT["yarn_libraries_disagree"] += int(abs(ratio - factor) > 1e-9)
+    else:
+        close("rope_freq", f"{name} cos/sin factor vs vLLM", torch.tensor(factor), torch.tensor(float(vl[1])), TOL_FREQ)
     base = impl.base_inv_freq(r.dim, r.base)
     if r.kind == "llama3":
         wavelen = 2 * math.pi / base
@@ -435,6 +451,7 @@ REAL = {
     "Mixtral 8x7B (GQA)": dict(layers=32, n_kv_heads=8, head_dim=128),
     "DeepSeek-V2 (MLA)": dict(layers=60, d_c=512, d_rope=64),
     "DeepSeek-V2 if it were MHA": dict(layers=60, n_kv_heads=128, head_dim=128),  # Table 1's 2 n_h d_h l
+    "DeepSeek-V2 caching expanded keys and values": dict(layers=60, n_kv_heads=128, head_dim=192, v_head_dim=128),
 }
 
 
@@ -522,6 +539,7 @@ MUTATIONS = {
     "gptj_pairs_as_neox": "gptj rotation pairs (i, i + d/2) instead of adjacent dimensions",
     "inv_freq_exponent": "theta_i = base^(-i/d) instead of base^(-2i/d)",
     "llama3_no_blend": "Llama 3.1 divides the blended band by the full factor",
+    "llama3_clip_slow_freqs": "Llama 3.1 frequencies below 1e-6 are set to 0",
     "yarn_ramp_inverted": "YaRN interpolates the fast dimensions and keeps the slow ones",
     "yarn_no_attention_factor": "YaRN leaves cos and sin unscaled",
     "decode_position_reset": "each forward call starts its positions at 0",
@@ -570,6 +588,9 @@ def apply_mutation(name: str) -> None:
         impl.apply_rope = lambda x, cos, sin, style: orig(x, cos, sin, "neox")
     elif name == "inv_freq_exponent":
         impl.base_inv_freq = lambda dim, base: 1.0 / base ** (torch.arange(0, dim, 2, dtype=DT) / dim / 2)
+    elif name == "llama3_clip_slow_freqs":
+        orig = impl.llama3_inv_freq
+        impl.llama3_inv_freq = lambda r: orig(r).masked_fill(orig(r) < 1e-6, 0.0)
     elif name == "llama3_no_blend":
         def f(r):
             inv = impl.base_inv_freq(r.dim, r.base)

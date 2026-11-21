@@ -75,7 +75,10 @@ longer contexts they produce angles the model never saw. Both methods slow down 
 The Llama 3.1 values are those transformers notes as "the original implementation"
 ([`modeling_rope_utils.py#L644`](https://github.com/huggingface/transformers/blob/v5.22.2/src/transformers/modeling_rope_utils.py#L644)).
 The YaRN values are from DeepSeek-V2 section 3.1.4, which states
-the length factor as `0.0707 ln s + 1`.
+the length factor as `0.0707 ln s + 1`. When `mscale` is set but `mscale_all_dim` is not, the libraries
+differ: transformers falls back to `0.1 ln s + 1` for cos and sin, vLLM keeps the ratio with
+`mscale(s, 0) = 1`. At `s` = 40, `mscale` 0.707 that is 1.369 against 1.261. impl follows transformers;
+DeepSeek-V2 sets both, where the two agree.
 
 ### Grouped-query attention
 
@@ -133,14 +136,14 @@ matrix. So the latent carries no position, and position enters only through the 
 MLA caches 1.76% of that MHA (57× less). The paper puts it as GQA with 2.25 groups (Table 1);
 `check.py` confirms `4 × 34,560` equals GQA with 9 groups.
 
-**Three ways to decode with MLA.** Per layer, one new token, `S` cached tokens, multiply-adds
-(arithmetic from the shapes, not a measurement):
+**Three ways to decode with MLA.** Cache per token over all 60 layers in bf16, and multiply-adds for one
+layer, one new token, `S` cached tokens (arithmetic from the shapes, not a measurement):
 
-| Option | Cache per token | Work at `S` = 4,096 |
+| Option | Cache per token | Work per layer at `S` = 4,096 |
 |---|---|---|
-| cache the expanded keys and values | 3,840 KiB (the MHA row above) | attention only |
-| cache `c`, expand all `S` keys and values every step | 67.5 KiB | 6.9 · 10¹⁰ |
-| cache `c`, absorbed: attend to `c` directly | 67.5 KiB | 5.9 · 10⁸ (117× less) |
+| cache the expanded keys (`d_nope + d_R` = 192 per head) and values (128 per head) | 60 · 128 · 320 = 2,457,600 elements, 4,800 KiB | attention only |
+| cache `c` and `k_R`, expand all `S` keys and values every step | 67.5 KiB | 6.9 · 10¹⁰ |
+| cache `c` and `k_R`, absorbed: attend to `c` directly | 67.5 KiB | 5.9 · 10⁸ (117× less) |
 
 For prefill, where every position is a query, the ranking flips: absorbed attention works in `d_c + d_R`
 = 576 dimensions per score instead of 192, and at `S` = 4,096 costs 3.2× the naive form. That is why
@@ -151,8 +154,9 @@ logits within the float64 identity tolerance (§5).
 ### Incremental decode
 
 Each variant caches what the next token needs: rotated keys and values per key/value head, or `c` and
-`k_R`. A token's cache entry depends only on that token and its position, so feeding a sequence in any
-split (one shot, one token at a time, or chunks) gives the same logits and the same cache.
+`k_R`. With causal masking, a token's cache entry depends only on the tokens up to and including it,
+never on later ones, so feeding a sequence in any split (one shot, one token at a time, or chunks) gives
+the same logits and the same cache.
 
 ## 4. Code and how to run it
 
@@ -160,14 +164,14 @@ split (one shot, one token at a time, or chunks) gives the same logits and the s
 |---|---|
 | `impl.py` | RoPE (`rope_inv_freq` for default, Llama 3.1 and YaRN; `apply_rope` in both styles); `gqa_forward` with `KVCache`, `mha_to_gqa`; `route` (Mixtral and DeepSeek-V2 routing), `moe_forward`; `mla_forward` and `mla_forward_absorbed` with `LatentCache`; `kv_elements_per_token`; a decoder (`Model`, `model_forward`) mixing them. Float64, torch only. |
 | `oracle.py` | Small transformers Llama, Mixtral and DeepSeek-V2 models (eager attention, eager experts, float64) with their weights copied into impl; transformers' and vLLM's RoPE and router functions. Pins transformers 5.22.2 and vLLM 0.34.0. |
-| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 24 bugs and requires each to be reported, after an unmutated run passes. |
+| `check.py` | Every comparison below; writes `results/check.json`. `--self-test` plants 25 bugs and requires each to be reported, after an unmutated run passes. |
 
 ```bash
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 04-transformer-variants/check.py --out 04-transformer-variants/results/check.json
 scripts/run-capped --mem 4G --cpus 4 -- .venv/bin/python 04-transformer-variants/check.py --self-test --out 04-transformer-variants/results/self_test.json
 ```
 
-The check takes about 1 second after a few seconds of imports, with a peak RSS of about 720 MiB (most of
+The check takes about 1 second after a few seconds of imports, with a peak RSS of about 790 MiB (most of
 it importing vLLM).
 
 ## 5. Checks and expected results
@@ -176,9 +180,9 @@ it importing vLLM).
 
 | Family | What is compared | Matrix |
 |---|---|---|
-| rope freq | impl's frequencies and cos/sin factor vs transformers' RoPE init and vLLM's rotary classes | default (`d` 8, 64, 128), Llama 3.1 (small, the real 8B setting, another factor), YaRN (small, DeepSeek-V2's, without mscale) |
-| rope apply | `impl.apply_rope` vs transformers' Llama `apply_rotary_pos_emb` and vLLM's `forward_static`, both given impl's cos and sin; vs DeepSeek-V2's `apply_rotary_emb` | the same 9 settings, 24 positions up to 3× the trained context, 3 heads |
-| rope identity | score depends only on distance; norms kept (times the cos/sin factor); gptj = neox under the permutation | 9 settings × 3 seeds |
+| rope freq | impl's frequencies and cos/sin factor vs transformers' RoPE init and vLLM's rotary classes | default (`d` 8, 64, 128), Llama 3.1 (small, the real 8B setting, another factor), YaRN (small, DeepSeek-V2's, without mscale, `mscale` without `mscale_all_dim`: vLLM checked against its own rule there) |
+| rope apply | `impl.apply_rope` vs transformers' Llama `apply_rotary_pos_emb` and vLLM's `forward_static`, both given impl's cos and sin; vs DeepSeek-V2's `apply_rotary_emb` | the same 10 settings, 24 positions up to 3× the trained context, 3 heads |
+| rope identity | score depends only on distance; norms kept (times the cos/sin factor); gptj = neox under the permutation | 10 settings × 3 seeds |
 | routing | `impl.route` vs transformers' Mixtral and DeepSeek-V2 routers and vLLM's `_softmax_topk` and `_grouped_topk`: same experts per token, same gate weights | `E` ∈ {6, 8, 16, 32, 64}, `k` 1–8, 64 tokens; every valid group split with 1 … `n_group − 1` kept groups, scaling 1 and 16, renormalized or not |
 | moe identity | softmax-top-k-renormalize = softmax over the top-k logits; sparse MoE = dense weighted sum (with shared experts); tokens per expert; group-limited choices stay inside the kept groups | 3 router shapes |
 | gqa identity | GQA = MHA with key/value heads repeated per group; mean-pooling heads that agree within a group changes nothing; pooled key and value weights are group means | `(H_q, H_kv)` ∈ (4,4), (4,2), (4,1), (8,2), (6,3), (12,4) |
@@ -188,20 +192,22 @@ it importing vLLM).
 | inputs | too few caches for the layers, pooling a non-MHA layer, groups that do not split the experts, kept groups smaller than `k`: all raise `ValueError` | |
 
 Tolerances: impl identities `1e-10 + 1e-9·|x|`; a float64 reference given impl's cos and sin
-`1e-12 + 1e-12·|x|`; references that compute in float32 (RoPE frequencies, router softmax, DeepSeek-V2's
-`apply_rotary_emb`) `1e-6 + 1e-5·|x|`; whole transformers models `1e-5 + 1e-5·|x|`, because their RMSNorm
-and RoPE run in float32 even for a float64 model. The float64 identities cover what the looser
-tolerances could hide.
+`1e-12 + 1e-12·|x|`; RoPE frequencies and factors, computed in float32 by both libraries, `1e-6·|x|`
+with no absolute term, because the slowest frequencies are near `1e-7` and an absolute term would let
+one be zeroed; router gate weights and DeepSeek-V2's `apply_rotary_emb` (float32) `1e-6 + 1e-5·|x|`; whole
+transformers models `1e-5 + 1e-5·|x|`, because their RMSNorm and RoPE run in float32 even for a float64
+model. A bug that moves logits by less than that would pass the model comparison; the float64 checks of
+each piece (RoPE apply, decode, absorbed MLA, GQA, MoE) are there to catch it piece by piece.
 
-A pass also needs all 76 cases and minimum counts of: Llama 3.1 dimensions in the blended band, YaRN
-dimensions on the ramp, tokens whose experts change because of the group limit, routed tokens, experts
+A pass also needs all 81 cases and minimum counts of: Llama 3.1 dimensions in the blended band, YaRN
+dimensions on the ramp, the YaRN setting where transformers and vLLM disagree, tokens whose experts change because of the group limit, routed tokens, experts
 checked one by one (all 68), and single-token decode steps.
 
-**Result** (`results/check.json`): passed. 1,281 comparisons. Largest error over tolerance: `0.18`
+**Result** (`results/check.json`): passed. 1,296 comparisons. Largest error over tolerance: `0.18`
 (decode against transformers). The closest pair of expert scores across the routing tests was `3.0e-5`
 apart, so the float32 routers' choices are not decided by rounding.
 
-**Planted bugs** (`results/self_test.json`): all 24 are reported as mismatches, after an unmutated run
+**Planted bugs** (`results/self_test.json`): all 25 are reported as mismatches, after an unmutated run
 passes.
 
 | Mutation | First reported by |
@@ -210,6 +216,7 @@ passes.
 | gptj rotation pairs `(i, i + d/2)` | rope apply (DeepSeek-V2) |
 | `θ_i = base^(−i/d)` | rope freq |
 | Llama 3.1 divides the blended band by the full factor | rope freq |
+| Llama 3.1 frequencies below `1e-6` set to 0 | rope freq (the real 8B setting) |
 | YaRN interpolates the fast dimensions and keeps the slow ones | rope freq |
 | YaRN leaves cos and sin unscaled | rope freq (factor) |
 | each forward call starts its positions at 0 | model decode |
@@ -234,7 +241,7 @@ passes.
 **Things the references do that a test has to work around.**
 
 - transformers' RMSNorm and RoPE cast to float32 even in a float64 model, so its logits agree with impl
-  to about `1e-6`, not `1e-15`. The float64 identities and the float64 RoPE comparisons cover that gap.
+  to about `1e-6`, not `1e-15`.
 - transformers' default experts path (`grouped_mm`) refuses float64; the small models select the
   eager experts path.
 - A transformers config needs `hidden_size` divisible by the head count even when `head_dim` is set.

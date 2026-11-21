@@ -22,7 +22,7 @@
       "what": "theta_i = base^(-i/d) instead of base^(-2i/d)",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "rope_freq default d8 inv_freq vs transformers: max abs diff 2.162e-01 exceeds atol=1e-06 rtol=1e-05",
+      "first_mismatch": "rope_freq default d8 inv_freq vs transformers: max abs diff 2.162e-01 exceeds atol=0.0 rtol=1e-06",
       "error": null
     },
     {
@@ -30,7 +30,15 @@
       "what": "Llama 3.1 divides the blended band by the full factor",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "rope_freq llama3 small inv_freq vs transformers: max abs diff 2.660e-03 exceeds atol=1e-06 rtol=1e-05",
+      "first_mismatch": "rope_freq llama3 small inv_freq vs transformers: max abs diff 2.660e-03 exceeds atol=0.0 rtol=1e-06",
+      "error": null
+    },
+    {
+      "mutation": "llama3_clip_slow_freqs",
+      "what": "Llama 3.1 frequencies below 1e-6 are set to 0",
+      "exit": 1,
+      "caught": true,
+      "first_mismatch": "rope_freq llama3.1 8B inv_freq vs transformers: max abs diff 8.555e-07 exceeds atol=0.0 rtol=1e-06",
       "error": null
     },
     {
@@ -38,7 +46,7 @@
       "what": "YaRN interpolates the fast dimensions and keeps the slow ones",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "rope_freq yarn small inv_freq vs transformers: max abs diff 7.500e-01 exceeds atol=1e-06 rtol=1e-05",
+      "first_mismatch": "rope_freq yarn small inv_freq vs transformers: max abs diff 7.500e-01 exceeds atol=0.0 rtol=1e-06",
       "error": null
     },
     {
@@ -46,7 +54,7 @@
       "what": "YaRN leaves cos and sin unscaled",
       "exit": 1,
       "caught": true,
-      "first_mismatch": "rope_freq yarn no mscale cos/sin factor vs transformers: max abs diff 2.079e-01 exceeds atol=1e-06 rtol=1e-05",
+      "first_mismatch": "rope_freq yarn no mscale cos/sin factor vs transformers: max abs diff 2.079e-01 exceeds atol=0.0 rtol=1e-06",
       "error": null
     },
     {

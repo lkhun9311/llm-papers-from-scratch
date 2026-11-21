@@ -24,9 +24,9 @@
     }
   },
   "cases": {
-    "rope_freq": 9,
-    "rope_apply": 9,
-    "rope_identity": 27,
+    "rope_freq": 10,
+    "rope_apply": 10,
+    "rope_identity": 30,
     "routing": 7,
     "moe_identity": 3,
     "gqa_identity": 6,
@@ -35,9 +35,9 @@
     "inputs": 1
   },
   "expected_cases": {
-    "rope_freq": 9,
-    "rope_apply": 9,
-    "rope_identity": 27,
+    "rope_freq": 10,
+    "rope_apply": 10,
+    "rope_identity": 30,
     "routing": 7,
     "moe_identity": 3,
     "gqa_identity": 6,
@@ -52,9 +52,9 @@
     "compare_model_decode": 120,
     "compare_model_hf": 81,
     "compare_moe_identity": 120,
-    "compare_rope_apply": 18,
-    "compare_rope_freq": 36,
-    "compare_rope_identity": 81,
+    "compare_rope_apply": 20,
+    "compare_rope_freq": 40,
+    "compare_rope_identity": 90,
     "compare_routing": 668
   },
   "max_error_over_tolerance": {
@@ -63,7 +63,7 @@
     "model_hf": 0.15,
     "moe_identity": 3.58e-06,
     "rope_apply": 0.0722,
-    "rope_freq": 0.00544,
+    "rope_freq": 0.321,
     "rope_identity": 0.000211,
     "routing": 0.14
   },
@@ -71,13 +71,13 @@
     "routing": 3.04e-05
   },
   "seconds_per_family": {
-    "rope_freq": 0.1,
+    "rope_freq": 0.2,
     "rope_apply": 0.0,
     "rope_identity": 0.0,
     "routing": 0.1,
     "moe_identity": 0.0,
     "gqa_identity": 0.0,
-    "model": 0.7,
+    "model": 0.6,
     "kv_table": 0.0,
     "inputs": 0.0
   },
@@ -101,11 +101,16 @@
     "DeepSeek-V2 if it were MHA": {
       "elements_per_token": 1966080,
       "kib_per_token_bf16": 3840.0
+    },
+    "DeepSeek-V2 caching expanded keys and values": {
+      "elements_per_token": 2457600,
+      "kib_per_token_bf16": 4800.0
     }
   },
   "coverage": {
     "llama3_blend_dims": 11,
-    "yarn_partial_ramp_dims": 20,
+    "yarn_libraries_disagree": 1,
+    "yarn_partial_ramp_dims": 32,
     "group_limit_changed_choice": 1491,
     "router_tokens": 448,
     "experts_checked_directly": 68,
@@ -113,6 +118,7 @@
   },
   "min_coverage": {
     "llama3_blend_dims": 1,
+    "yarn_libraries_disagree": 1,
     "yarn_partial_ramp_dims": 1,
     "group_limit_changed_choice": 10,
     "router_tokens": 400,
@@ -124,6 +130,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 0.8,
-  "peak_rss_mib": 718
+  "seconds": 0.9,
+  "peak_rss_mib": 792
 }
