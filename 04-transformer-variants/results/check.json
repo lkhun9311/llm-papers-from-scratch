@@ -18,6 +18,10 @@
       "atol": 1e-06,
       "rtol": 1e-05
     },
+    "rope_frequencies": {
+      "atol": 0.0,
+      "rtol": 1e-06
+    },
     "transformers_model": {
       "atol": 1e-05,
       "rtol": 1e-05
@@ -50,7 +54,7 @@
   "comparisons": {
     "compare_gqa_identity": 24,
     "compare_inputs": 4,
-    "compare_kv_size": 129,
+    "compare_kv_size": 130,
     "compare_model_decode": 120,
     "compare_model_hf": 81,
     "compare_moe_identity": 238,
@@ -73,13 +77,13 @@
     "routing": 3.04e-05
   },
   "seconds_per_family": {
-    "rope_freq": 0.1,
+    "rope_freq": 0.3,
     "rope_apply": 0.0,
     "rope_identity": 0.0,
     "routing": 0.2,
     "moe_identity": 0.0,
     "gqa_identity": 0.0,
-    "model": 0.8,
+    "model": 0.7,
     "kv_table": 0.0,
     "inputs": 0.0,
     "underflow": 0.0
@@ -163,6 +167,6 @@
   "first_mismatch": null,
   "error": null,
   "passed": true,
-  "seconds": 1.1,
+  "seconds": 1.2,
   "peak_rss_mib": 797
 }

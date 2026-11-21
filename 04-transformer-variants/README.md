@@ -204,9 +204,10 @@ A pass also needs all 82 cases and minimum counts of: Llama 3.1 dimensions in th
 dimensions on the ramp, the YaRN setting where transformers and vLLM disagree, tokens whose experts change because of the group limit, routed tokens, experts
 checked one by one (all 68), and single-token decode steps.
 
-**Result** (`results/check.json`): passed. 2,098 comparisons. Largest error over tolerance: `0.32`
-(RoPE frequencies against the float32 libraries, relative `1e-6`). The closest pair of expert scores across the routing tests was `3.0e-5`
-apart, so the float32 routers' choices are not decided by rounding.
+**Result** (`results/check.json`): passed. 2,099 comparisons. Largest error over tolerance: `0.32`
+(RoPE frequencies against the float32 libraries, relative `1e-6`). Across the routing tests, the k-th and (k+1)-th expert scores (without the group
+limit) were never closer than `3.0e-5`, so those choices are not decided by float32 rounding. Gaps
+between group scores are not measured.
 
 **Planted bugs** (`results/self_test.json`): all 26 are reported as mismatches, after an unmutated run
 passes.

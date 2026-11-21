@@ -493,6 +493,8 @@ def kv_table() -> dict:
     # Formula sanity against hand arithmetic, so the README table cannot drift from the code.
     equal("kv_size", "Llama 3 8B elements per token", out["Llama 3 8B (GQA)"]["elements_per_token"], 32 * 2 * 8 * 128)
     equal("kv_size", "DeepSeek-V2 elements per token", out["DeepSeek-V2 (MLA)"]["elements_per_token"], 60 * (512 + 64))
+    equal("kv_size", "DeepSeek-V2 expanded keys (192) and values (128) per head",
+          out["DeepSeek-V2 caching expanded keys and values"]["elements_per_token"], 60 * 128 * (192 + 128))
     # DeepSeek-V2 Table 1 and section 2.1.4: with d_c = 4 d_h and d_R = d_h / 2, MLA caches as much as GQA with 2.25 groups.
     # Groups must be whole, so compare four MLA caches with GQA at 4 * 2.25 = 9 groups.
     equal("kv_size", "DeepSeek-V2 MLA = GQA with 2.25 groups", 4 * out["DeepSeek-V2 (MLA)"]["elements_per_token"],
@@ -800,7 +802,8 @@ def main() -> int:
         "mutation": args.mutate,
         "tolerances": {name: {"atol": t[0], "rtol": t[1]} for name, t in
                        (("impl_identity", TOL_ID), ("float64_reference", TOL_EXACT64),
-                        ("float32_reference", TOL_F32), ("transformers_model", TOL_HF))},
+                        ("float32_reference", TOL_F32), ("rope_frequencies", TOL_FREQ),
+                        ("transformers_model", TOL_HF))},
         "cases": cases,
         "expected_cases": EXPECTED_CASES,
         "comparisons": {k: v for k, v in sorted(COUNT.items()) if k.startswith("compare_")},
